@@ -22,29 +22,29 @@ DEFAULT_FPS = 30
 DEFAULT_IMU_FREQUENCY = 200
 
 # IMU noise parameters for RealSense
-IMU_GYROSCOPE_NOISE_DENSITY = 6.0673370376614875e-03
-IMU_GYROSCOPE_RANDOM_WALK = 3.6211951458325785e-05
-IMU_ACCELEROMETER_NOISE_DENSITY = 3.3621979208052800e-02
-IMU_ACCELEROMETER_RANDOM_WALK = 9.8256589971851467e-04
+# IMU_GYROSCOPE_NOISE_DENSITY = 6.0673370376614875e-03
+# IMU_GYROSCOPE_RANDOM_WALK = 3.6211951458325785e-05
+# IMU_ACCELEROMETER_NOISE_DENSITY = 3.3621979208052800e-02
+# IMU_ACCELEROMETER_RANDOM_WALK = 9.8256589971851467e-04
+IMU_GYROSCOPE_NOISE_DENSITY = 6.0673370376614875e-01
+IMU_GYROSCOPE_RANDOM_WALK = 3.6211951458325785e-03
+IMU_ACCELEROMETER_NOISE_DENSITY = 3.3621979208052800e-01
+IMU_ACCELEROMETER_RANDOM_WALK = 9.8256589971851467e-02
 
 
 def opengl_to_opencv_transform(
     rotation: np.ndarray, translation: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Convert from OpenGL coordinate system to OpenCV coordinate system.
-    
+
     Args:
         rotation: 3x3 rotation matrix in OpenGL coordinates
         translation: 3x1 translation vector in OpenGL coordinates
-        
+
     Returns:
         Tuple of (rotation_opencv, translation_opencv)
     """
-    transform_matrix = np.array([
-        [1, 0, 0],
-        [0, -1, 0],
-        [0, 0, -1]
-    ])
+    transform_matrix = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
     rotation_opencv = transform_matrix @ rotation @ transform_matrix.T
     translation_opencv = transform_matrix @ translation
     return rotation_opencv, translation_opencv
@@ -52,11 +52,11 @@ def opengl_to_opencv_transform(
 
 def transform_to_pose(transform_matrix=None) -> vslam.Pose:
     """Convert a transformation matrix to a vslam.Pose object.
-    
+
     Args:
         transform_matrix: Either a RealSense transform object or a list of lists
                          representing the transformation matrix
-                         
+
     Returns:
         vslam.Pose object
     """
@@ -79,16 +79,16 @@ def transform_to_pose(transform_matrix=None) -> vslam.Pose:
         rotation_matrix = np.eye(3)
         translation_vec = [0] * 3
         rotation_quat = Rotation.from_matrix(rotation_matrix).as_quat()
-    
+
     return vslam.Pose(rotation=rotation_quat, translation=translation_vec)
 
 
 def rig_from_imu_pose(rs_transform=None) -> vslam.Pose:
     """Convert IMU pose from OpenGL to OpenCV coordinate system.
-    
+
     Args:
         rs_transform: RealSense transform object
-        
+
     Returns:
         vslam.Pose object in OpenCV coordinates
     """
@@ -102,23 +102,35 @@ def get_rs_camera(
     rs_intrinsics, transform_matrix: Optional[Any] = None
 ) -> vslam.Camera:
     """Create a Camera object from RealSense intrinsics.
-    
+
     Args:
         rs_intrinsics: RealSense intrinsics object
         transform_matrix: Optional transformation matrix for camera pose
-        
+
     Returns:
         vslam.Camera object
     """
     cam = vslam.Camera()
-    cam.distortion = vslam.Distortion(vslam.Distortion.Model.Pinhole)
+
+    # RealSense Inverse Brown Conrady coefficients order: [k1, k2, p1, p2, k3]
+    # cuVSLAM Brown distortion model order:               [k1, k2, k3, p1, p2]
+    coeffs = rs_intrinsics.coeffs
+    print(f"[camera] RS distortion coeffs (k1,k2,p1,p2,k3): {coeffs[:5]}")
+    if any(c != 0.0 for c in coeffs[:5]):
+        brown_coeffs = [coeffs[0], coeffs[1], coeffs[4], coeffs[2], coeffs[3]]
+        print(f"[camera] Using Brown distortion (k1,k2,k3,p1,p2): {brown_coeffs}")
+        cam.distortion = vslam.Distortion(vslam.Distortion.Model.Brown, brown_coeffs)
+    else:
+        print("[camera] All coeffs zero, falling back to Pinhole (no distortion)")
+        cam.distortion = vslam.Distortion(vslam.Distortion.Model.Pinhole)
+
     cam.focal = rs_intrinsics.fx, rs_intrinsics.fy
     cam.principal = rs_intrinsics.ppx, rs_intrinsics.ppy
     cam.size = rs_intrinsics.width, rs_intrinsics.height
-    
+
     if transform_matrix is not None:
         cam.rig_from_camera = transform_to_pose(transform_matrix)
-    
+
     return cam
 
 
@@ -126,11 +138,11 @@ def get_rs_imu(
     imu_extrinsics, frequency: int = DEFAULT_IMU_FREQUENCY
 ) -> vslam.ImuCalibration:
     """Create an IMU calibration object from RealSense extrinsics.
-    
+
     Args:
         imu_extrinsics: RealSense IMU extrinsics
         frequency: IMU sampling frequency in Hz
-        
+
     Returns:
         vslam.ImuCalibration object
     """
@@ -147,15 +159,15 @@ def get_rs_imu(
 def setup_pipeline(
     serial_number: str,
     resolution: Tuple[int, int] = DEFAULT_RESOLUTION,
-    fps: int = DEFAULT_FPS
+    fps: int = DEFAULT_FPS,
 ) -> Tuple[rs.pipeline, rs.config]:
     """Set up and configure a RealSense pipeline.
-    
+
     Args:
         serial_number: Camera serial number
         resolution: Camera resolution as (width, height)
         fps: Frames per second
-        
+
     Returns:
         Tuple of (pipeline, config)
     """
@@ -171,15 +183,13 @@ def setup_pipeline(
     return pipeline, config
 
 
-def get_camera_intrinsics(
-    pipeline: rs.pipeline, config: rs.config
-) -> Tuple[Any, Any]:
+def get_camera_intrinsics(pipeline: rs.pipeline, config: rs.config) -> Tuple[Any, Any]:
     """Get camera intrinsics from a RealSense pipeline.
-    
+
     Args:
         pipeline: RealSense pipeline
         config: RealSense config
-        
+
     Returns:
         Tuple of (left_intrinsics, right_intrinsics)
     """
@@ -195,7 +205,7 @@ def configure_device(
     pipeline: rs.pipeline, config: rs.config, is_master: bool = False
 ) -> None:
     """Configure device settings like IR emitter and sync mode.
-    
+
     Args:
         pipeline: RealSense pipeline
         config: RealSense config
@@ -205,7 +215,7 @@ def configure_device(
     pipeline_profile = config.resolve(pipeline_wrapper)
     device = pipeline_profile.get_device()
     depth_sensor = device.query_sensors()[0]
-    
+
     if depth_sensor.supports(rs.option.emitter_enabled):
         depth_sensor.set_option(rs.option.emitter_enabled, 0)
         # First camera is master, others are slave
@@ -213,88 +223,81 @@ def configure_device(
         depth_sensor.set_option(rs.option.inter_cam_sync_mode, sync_mode)
 
 
-def get_rs_stereo_rig(
-    camera_params: Dict[str, Dict[str, Any]]
-) -> vslam.Rig:
+def get_rs_stereo_rig(camera_params: Dict[str, Dict[str, Any]]) -> vslam.Rig:
     """Create a stereo Rig object from RealSense parameters.
-    
+
     Args:
         camera_params: Dictionary containing camera parameters
-        
+
     Returns:
         vslam.Rig object
     """
     rig = vslam.Rig()
-    
-    cameras = [get_rs_camera(camera_params['left']['intrinsics'])]
-    
-    if 'right' in camera_params:
+
+    cameras = [get_rs_camera(camera_params["left"]["intrinsics"])]
+
+    if "right" in camera_params:
         cameras.append(
             get_rs_camera(
-                camera_params['right']['intrinsics'],
-                camera_params['right']['extrinsics']
+                camera_params["right"]["intrinsics"],
+                camera_params["right"]["extrinsics"],
             )
         )
-    
+
     rig.cameras = cameras
     return rig
 
 
-def get_rs_multi_rig(
-    camera_params: Dict[str, Dict[str, Dict[str, Any]]]
-) -> vslam.Rig:
+def get_rs_multi_rig(camera_params: Dict[str, Dict[str, Dict[str, Any]]]) -> vslam.Rig:
     """Create a multi-camera Rig object from RealSense parameters.
-    
+
     Args:
         camera_params: Dictionary containing parameters for multiple cameras
-        
+
     Returns:
         vslam.Rig object with multiple stereo cameras
     """
     rig = vslam.Rig()
     cameras_list = []
-    
+
     for i in range(1, len(camera_params) + 1):
         camera_idx = f"camera_{i}"
-        
+
         # Add left camera
         cameras_list.append(
             get_rs_camera(
-                camera_params[camera_idx]['left']['intrinsics'],
-                camera_params[camera_idx]['left']['extrinsics']
+                camera_params[camera_idx]["left"]["intrinsics"],
+                camera_params[camera_idx]["left"]["extrinsics"],
             )
         )
-        
+
         # Add right camera
         cameras_list.append(
             get_rs_camera(
-                camera_params[camera_idx]['right']['intrinsics'],
-                camera_params[camera_idx]['right']['extrinsics']
+                camera_params[camera_idx]["right"]["intrinsics"],
+                camera_params[camera_idx]["right"]["extrinsics"],
             )
         )
-    
+
     rig.cameras = cameras_list
     return rig
 
 
-def get_rs_vio_rig(
-    camera_params: Dict[str, Dict[str, Any]]
-) -> vslam.Rig:
+def get_rs_vio_rig(camera_params: Dict[str, Dict[str, Any]]) -> vslam.Rig:
     """Create a VIO Rig object with cameras and IMU from RealSense parameters.
-    
+
     Args:
         camera_params: Dictionary containing camera and IMU parameters
-        
+
     Returns:
         vslam.Rig object with cameras and IMU
     """
     rig = vslam.Rig()
     rig.cameras = [
-        get_rs_camera(camera_params['left']['intrinsics']),
+        get_rs_camera(camera_params["left"]["intrinsics"]),
         get_rs_camera(
-            camera_params['right']['intrinsics'],
-            camera_params['right']['extrinsics']
-        )
+            camera_params["right"]["intrinsics"], camera_params["right"]["extrinsics"]
+        ),
     ]
-    rig.imus = [get_rs_imu(camera_params['imu']['cam_from_imu'])]
-    return rig 
+    rig.imus = [get_rs_imu(camera_params["imu"]["cam_from_imu"])]
+    return rig

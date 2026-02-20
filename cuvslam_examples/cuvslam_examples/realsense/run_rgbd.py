@@ -10,18 +10,20 @@
 #
 from typing import List, Optional
 
+import cv2
 import numpy as np
 import pyrealsense2 as rs
 
 import cuvslam as vslam
-from camera_utils import get_rs_stereo_rig
-from visualizer import RerunVisualizer
+from cuvslam_examples.realsense.camera_utils import get_rs_stereo_rig
+from cuvslam_examples.realsense.utils import OdomLogger, Pose
+from cuvslam_examples.realsense.visualizer import RerunVisualizer
 
-# Constants
+# Constants — match ROS2 realsense2_camera_node config
 RESOLUTION = (640, 360)
-FPS = 30
+FPS = 15
 WARMUP_FRAMES = 60
-IMAGE_JITTER_THRESHOLD_MS = 35 * 1e6  # 35ms in nanoseconds
+IMAGE_JITTER_THRESHOLD_MS = ((1000 / FPS) + 2) * 1e6  # in nanoseconds
 NUM_VIZ_CAMERAS = 2
 
 
@@ -33,7 +35,7 @@ def main() -> None:
 
     # Configure streams
     config.enable_stream(
-        rs.stream.color, RESOLUTION[0], RESOLUTION[1], rs.format.bgr8, FPS
+        rs.stream.color, RESOLUTION[0], RESOLUTION[1], rs.format.rgb8, FPS
     )
     config.enable_stream(
         rs.stream.depth, RESOLUTION[0], RESOLUTION[1], rs.format.z16, FPS
@@ -43,6 +45,7 @@ def main() -> None:
     profile = pipeline.start(config)
     depth_sensor = profile.get_device().first_depth_sensor()
     depth_scale = depth_sensor.get_depth_scale()
+    print(f"[camera] Depth scale: {depth_scale}")
 
     align_to = rs.stream.color
     align = rs.align(align_to)
@@ -55,11 +58,11 @@ def main() -> None:
     color_frame = aligned_frames.get_color_frame()
 
     # Prepare camera parameters
-    camera_params = {'left': {}}
+    camera_params = {"left": {}}
 
     # Get intrinsics
     color_profile = color_frame.profile.as_video_stream_profile()
-    camera_params['left']['intrinsics'] = color_profile.intrinsics
+    camera_params["left"]["intrinsics"] = color_profile.intrinsics
 
     pipeline.stop()
 
@@ -74,24 +77,43 @@ def main() -> None:
         async_sba=True,
         enable_final_landmarks_export=True,
         odometry_mode=vslam.Tracker.OdometryMode.RGBD,
-        rgbd_settings=rgbd_settings
+        rgbd_settings=rgbd_settings,
     )
 
+    # Configure SLAM (async for real-time, planar for ground robot)
+    slam_cfg = vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+
     # Create rig using utility function
+    print("camer params: ", camera_params)
     rig = get_rs_stereo_rig(camera_params)
 
     # Initialize tracker and visualizer
-    tracker = vslam.Tracker(rig, cfg)
+    tracker = vslam.Tracker(rig, cfg, slam_cfg)
 
     # Get device product line for setting a supporting resolution
     pipeline_wrapper = rs.pipeline_wrapper(pipeline)
     pipeline_profile = config.resolve(pipeline_wrapper)
     device = pipeline_profile.get_device()
 
-    # Enable IR emitter for depth sensing
+    # Configure sensors to match ROS2 realsense2_camera_node settings
     depth_sensor = device.query_sensors()[0]
+
+    # Enable IR emitter for depth sensing
     if depth_sensor.supports(rs.option.emitter_enabled):
         depth_sensor.set_option(rs.option.emitter_enabled, 1)
+
+    # Enable inter-camera hardware sync
+    if depth_sensor.supports(rs.option.inter_cam_sync_mode):
+        depth_sensor.set_option(rs.option.inter_cam_sync_mode, 1)
+
+    # Enable auto exposure on depth module
+    if depth_sensor.supports(rs.option.enable_auto_exposure):
+        depth_sensor.set_option(rs.option.enable_auto_exposure, 1)
+
+    # Enable auto exposure on RGB camera
+    color_sensor = device.query_sensors()[1]
+    if color_sensor.supports(rs.option.enable_auto_exposure):
+        color_sensor.set_option(rs.option.enable_auto_exposure, 1)
 
     visualizer = RerunVisualizer(num_viz_cameras=NUM_VIZ_CAMERAS)
 
@@ -101,6 +123,8 @@ def main() -> None:
     frame_id = 0
     prev_timestamp: Optional[int] = None
     trajectory: List[np.ndarray] = []
+    odom_logger = OdomLogger()
+    alignment_saved = False
 
     try:
         while True:
@@ -134,16 +158,32 @@ def main() -> None:
             if frame_id > WARMUP_FRAMES:
                 images = [
                     np.asanyarray(color_frame.get_data()),
-                    np.asanyarray(aligned_depth_frame.get_data())
+                    np.asanyarray(aligned_depth_frame.get_data()),
                 ]
 
+                # Save one alignment check image right after warmup
+                if not alignment_saved:
+                    depth_norm = cv2.normalize(
+                        images[1], None, 0, 255, cv2.NORM_MINMAX
+                    ).astype(np.uint8)
+                    edges = cv2.Canny(depth_norm, 50, 150)
+                    overlay = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+                    overlay[edges > 0] = [0, 0, 255]
+                    cv2.imwrite("alignment_check.png", overlay)
+                    print(
+                        "[check] Saved alignment_check.png — depth edges should match color object boundaries"
+                    )
+                    alignment_saved = True
+
                 # Track frame
-                odom_pose_estimate, _ = tracker.track(
+                odom_pose_estimate, slam_pose = tracker.track(
                     timestamp, images=[images[0]], depths=[images[1]]
                 )
 
                 odom_pose = odom_pose_estimate.world_from_rig.pose
                 trajectory.append(odom_pose.translation)
+
+                odom_logger.log(frame_id, Pose(odom_pose), Pose(slam_pose))
 
                 # Store current timestamp for next iteration
                 prev_timestamp = timestamp
@@ -157,11 +197,12 @@ def main() -> None:
                     pose=odom_pose,
                     observations_main_cam=[observations, observations],
                     trajectory=trajectory,
-                    timestamp=timestamp
+                    timestamp=timestamp,
                 )
 
     finally:
         pipeline.stop()
+        odom_logger.close()
 
 
 if __name__ == "__main__":

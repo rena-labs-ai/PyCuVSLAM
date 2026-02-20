@@ -1,8 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="cuvslam",
-    version="0.2.0",
+    name="cuvslam-examples",
+    version="0.1.0",
     packages=find_packages(),
-    package_data={"cuvslam": ["*.so"]},
 )

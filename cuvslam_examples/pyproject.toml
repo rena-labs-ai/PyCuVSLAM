@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuvslam-examples"
+version = "0.1.0"
+description = "cuVSLAM example utilities (realsense VIO pipeline, etc.)"
+requires-python = ">=3.10"
+dependencies = [
+    "cuvslam",
+    "numpy",
+    "pyrealsense2",
+]
+
+[tool.setuptools.packages.find]
+include = ["cuvslam_examples*"]
