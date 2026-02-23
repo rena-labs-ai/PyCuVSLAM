@@ -33,6 +33,10 @@ IMU_JITTER_THRESHOLD_NS = 12 * 1e6
 class BaseTracker(ABC):
     """Abstract interface for cuVSLAM tracking strategies."""
 
+    @property
+    def num_viz_cameras(self) -> int:
+        return 1
+
     @abstractmethod
     def setup_camera_parameters(self) -> dict: ...
 
@@ -52,6 +56,14 @@ class BaseTracker(ABC):
 
     @abstractmethod
     def stop_streaming(self) -> None: ...
+
+    def get_viz_image_indices(self) -> List[int]:
+        """Image indices from TrackingResult.images to visualize."""
+        return [0]
+
+    def get_viz_observation_indices(self) -> List[int]:
+        """Camera indices passed to get_last_observations for each viz camera."""
+        return [0]
 
 
 class StereoTracker(BaseTracker):
@@ -431,6 +443,16 @@ class MultiCameraTracker(BaseTracker):
         self._running = False
         self._stereo_cameras: List[Dict] = []
 
+    @property
+    def num_viz_cameras(self) -> int:
+        return len(self._stereo_cameras)
+
+    def get_viz_image_indices(self) -> List[int]:
+        return list(range(0, len(self._stereo_cameras) * 2, 2))
+
+    def get_viz_observation_indices(self) -> List[int]:
+        return list(range(0, len(self._stereo_cameras) * 2, 2))
+
     def setup_camera_parameters(self) -> Dict[str, Dict]:
         with open(self._config_file, "r") as f:
             config_data = yaml.safe_load(f)
@@ -570,5 +592,163 @@ class MultiCameraTracker(BaseTracker):
                     Pose(vo_pose_estimate.world_from_rig.pose),
                     Pose(slam_pose),
                     tuple(all_images),
+                )
+            )
+
+
+RGBD_FPS = 15
+
+
+class RGBDTracker(BaseTracker):
+    """RGBD (color + depth) tracking strategy."""
+
+    def __init__(self) -> None:
+        self._pipeline: Optional[rs.pipeline] = None
+        self._running = False
+        self._depth_scale: float = 0.0
+
+    @property
+    def num_viz_cameras(self) -> int:
+        return 2
+
+    def get_viz_image_indices(self) -> List[int]:
+        return [0, 1]
+
+    def get_viz_observation_indices(self) -> List[int]:
+        return [0, 0]
+
+    def setup_camera_parameters(self) -> dict:
+        config = rs.config()
+        pipeline = rs.pipeline()
+
+        config.enable_stream(
+            rs.stream.color, RESOLUTION[0], RESOLUTION[1], rs.format.rgb8, RGBD_FPS
+        )
+        config.enable_stream(
+            rs.stream.depth, RESOLUTION[0], RESOLUTION[1], rs.format.z16, RGBD_FPS
+        )
+
+        profile = pipeline.start(config)
+        self._depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
+        print(f"[camera] Depth scale: {self._depth_scale}")
+
+        align = rs.align(rs.stream.color)
+        frames = align.process(pipeline.wait_for_frames())
+        color_intrinsics = (
+            frames.get_color_frame().profile.as_video_stream_profile().intrinsics
+        )
+        pipeline.stop()
+
+        return {"left": {"intrinsics": color_intrinsics}}
+
+    def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
+        rgbd_settings = vslam.Tracker.OdometryRGBDSettings()
+        rgbd_settings.depth_scale_factor = 1 / self._depth_scale
+        rgbd_settings.depth_camera_id = 0
+        rgbd_settings.enable_depth_stereo_tracking = False
+
+        return vslam.Tracker.OdometryConfig(
+            async_sba=True,
+            enable_final_landmarks_export=True,
+            odometry_mode=vslam.Tracker.OdometryMode.RGBD,
+            rgbd_settings=rgbd_settings,
+        )
+
+    def create_rig(self, camera_params: dict) -> vslam.Rig:
+        return get_rs_stereo_rig(camera_params)
+
+    def create_slam_config(self) -> vslam.Tracker.SlamConfig:
+        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+
+    def start_streaming(
+        self, tracker: vslam.Tracker, output_queue: queue.Queue
+    ) -> None:
+        self._pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_stream(
+            rs.stream.color, RESOLUTION[0], RESOLUTION[1], rs.format.rgb8, RGBD_FPS
+        )
+        config.enable_stream(
+            rs.stream.depth, RESOLUTION[0], RESOLUTION[1], rs.format.z16, RGBD_FPS
+        )
+
+        pipeline_wrapper = rs.pipeline_wrapper(self._pipeline)
+        pipeline_profile = config.resolve(pipeline_wrapper)
+        device = pipeline_profile.get_device()
+
+        depth_sensor = device.query_sensors()[0]
+        if depth_sensor.supports(rs.option.emitter_enabled):
+            depth_sensor.set_option(rs.option.emitter_enabled, 1)
+        if depth_sensor.supports(rs.option.inter_cam_sync_mode):
+            depth_sensor.set_option(rs.option.inter_cam_sync_mode, 1)
+        if depth_sensor.supports(rs.option.enable_auto_exposure):
+            depth_sensor.set_option(rs.option.enable_auto_exposure, 1)
+
+        color_sensor = device.query_sensors()[1]
+        if color_sensor.supports(rs.option.enable_auto_exposure):
+            color_sensor.set_option(rs.option.enable_auto_exposure, 1)
+
+        self._pipeline.start(config)
+        self._running = True
+
+        threading.Thread(
+            target=self._spin,
+            args=(tracker, output_queue),
+            daemon=True,
+        ).start()
+
+    def stop_streaming(self) -> None:
+        self._running = False
+        if self._pipeline:
+            self._pipeline.stop()
+
+    def _spin(self, tracker: vslam.Tracker, output_queue: queue.Queue) -> None:
+        frame_id = 0
+        prev_timestamp: Optional[int] = None
+        jitter_threshold = ((1000 / RGBD_FPS) + 2) * 1e6
+        align = rs.align(rs.stream.color)
+
+        while self._running:
+            frames = self._pipeline.wait_for_frames()
+            aligned = align.process(frames)
+            color_frame = aligned.get_color_frame()
+            depth_frame = aligned.get_depth_frame()
+
+            if not color_frame or not depth_frame:
+                continue
+
+            frame_id += 1
+            timestamp = int(color_frame.timestamp * 1e6)
+
+            if prev_timestamp is not None:
+                gap = timestamp - prev_timestamp
+                if gap > jitter_threshold:
+                    print(
+                        f"Warning: Camera stream drop: gap "
+                        f"({gap / 1e6:.2f} ms) exceeds threshold "
+                        f"{jitter_threshold / 1e6:.2f} ms"
+                    )
+
+            prev_timestamp = timestamp
+
+            if frame_id <= WARMUP_FRAMES:
+                continue
+
+            color_image = np.asanyarray(color_frame.get_data())
+            depth_image = np.asanyarray(depth_frame.get_data())
+
+            vo_pose_estimate, slam_pose = tracker.track(
+                timestamp, images=[color_image], depths=[depth_image]
+            )
+
+            if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+                continue
+
+            output_queue.put(
+                TrackingResult(
+                    timestamp,
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    (color_image, depth_image),
                 )
             )

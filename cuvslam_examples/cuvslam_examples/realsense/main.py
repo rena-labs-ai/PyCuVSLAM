@@ -9,8 +9,9 @@ import cuvslam as vslam
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import (
     BaseTracker,
-    StereoTracker,
     MultiCameraTracker,
+    RGBDTracker,
+    StereoTracker,
     VioTracker,
 )
 from cuvslam_examples.realsense.utils import OdomLogger, Pose
@@ -20,15 +21,16 @@ TRACKERS = {
     "stereo": StereoTracker,
     "vio": VioTracker,
     "multicam": MultiCameraTracker,
+    "rgbd": RGBDTracker,
 }
 
 
 def run(tracker: BaseTracker) -> None:
-    is_multicam = isinstance(tracker, MultiCameraTracker)
-    num_viz_cameras = len(tracker._stereo_cameras) if is_multicam else 1
+    viz_img_idx = tracker.get_viz_image_indices()
+    viz_obs_idx = tracker.get_viz_observation_indices()
 
     with Pipeline(tracker) as pipeline:
-        visualizer = RerunVisualizer(num_viz_cameras=num_viz_cameras)
+        visualizer = RerunVisualizer(num_viz_cameras=tracker.num_viz_cameras)
         odom_logger = OdomLogger()
 
         frame_id = 0
@@ -66,19 +68,15 @@ def run(tracker: BaseTracker) -> None:
                 ):
                     loop_closure_poses.append(current_lc_poses[-1].pose.translation)
 
-                left_images = [
-                    result.images[i] for i in range(0, len(result.images), 2)
-                ] if is_multicam else [result.images[0]]
-
-                left_observations = [
-                    pipeline.tracker.get_last_observations(i)
-                    for i in range(0, len(result.images), 2)
-                ] if is_multicam else [pipeline.tracker.get_last_observations(0)]
+                images = [result.images[i] for i in viz_img_idx]
+                observations = [
+                    pipeline.tracker.get_last_observations(i) for i in viz_obs_idx
+                ]
 
                 visualizer.visualize_frame(
                     frame_id=frame_id,
-                    images=left_images,
-                    observations_main_cam=left_observations,
+                    images=images,
+                    observations_main_cam=observations,
                     slam_pose=result.slam_pose,
                     slam_trajectory=slam_trajectory,
                     timestamp=result.timestamp,
