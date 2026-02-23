@@ -22,13 +22,15 @@ from camera_utils import (
     get_rs_multi_rig,
     setup_pipeline,
 )
+from utils import OdomLogger, Pose
 from visualizer import RerunVisualizer
 
 # Constants
-CONFIG_FILE = "frame_agx_rig.yaml"
-WARMUP_FRAMES = 500
-SYNC_MATCHING_THRESHOLD_MS = 5 * 1e6  # 5ms in nanoseconds
-IMAGE_JITTER_THRESHOLD_MS = 35 * 1e6  # 35ms in nanoseconds
+CONFIG_FILE = "src/rena_dependencies/pycuvslam/cuvslam_examples/cuvslam_examples/realsense/frame_agx_rig.yaml"
+WARMUP_FRAMES = 100
+FPS = 30
+SYNC_MATCHING_THRESHOLD_MS = 20 * 1e6  # 5ms in nanoseconds
+IMAGE_JITTER_THRESHOLD_MS = (1000 / FPS + 2) * 1e6  # nanoseconds
 
 
 def load_camera_configuration() -> Dict:
@@ -212,7 +214,8 @@ def main() -> None:
         enable_final_landmarks_export=True,
         horizontal_stereo_camera=True
     )
-    tracker = vslam.Tracker(rig, cfg)
+    slam_cfg = vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+    tracker = vslam.Tracker(rig, cfg, slam_cfg)
 
     # Configure all devices
     configure_all_devices(pipelines, configs)
@@ -220,9 +223,11 @@ def main() -> None:
     # Start all cameras
     start_all_cameras(pipelines, configs)
 
-    # Initialize visualization
+    # Initialize visualization and logging
     visualizer = RerunVisualizer(num_viz_cameras=len(serial_numbers))
-    trajectory: List[np.ndarray] = []
+    odom_logger = OdomLogger()
+    slam_trajectory: List[np.ndarray] = []
+    loop_closure_poses: List[np.ndarray] = []
     frame_id = 0
     prev_timestamp: Optional[int] = None
 
@@ -258,10 +263,26 @@ def main() -> None:
             check_timestamp_synchronization(all_timestamps)
             
             # Track frame using the first timestamp
-            odom_pose_estimate, _ = tracker.track(all_timestamps[0], tuple(all_images))
+            vo_pose_estimate, slam_pose = tracker.track(all_timestamps[0], tuple(all_images))
 
-            odom_pose = odom_pose_estimate.world_from_rig.pose
-            trajectory.append(odom_pose.translation)
+            if vo_pose_estimate.world_from_rig is None:
+                continue
+
+            if slam_pose is None:
+                continue
+
+            slam_trajectory.append(slam_pose.translation)
+
+            odom_logger.log(frame_id, Pose(vo_pose_estimate.world_from_rig.pose), Pose(slam_pose))
+
+            current_lc_poses = tracker.get_loop_closure_poses()
+            if current_lc_poses and (
+                not loop_closure_poses
+                or not np.array_equal(
+                    current_lc_poses[-1].pose.translation, loop_closure_poses[-1]
+                )
+            ):
+                loop_closure_poses.append(current_lc_poses[-1].pose.translation)
 
             # Visualize results (showing only left cameras)
             left_images = [all_images[i] for i in range(0, len(all_images), 2)]
@@ -269,21 +290,25 @@ def main() -> None:
                 tracker.get_last_observations(i)
                 for i in range(0, len(all_images), 2)
             ]
-            
+
             visualizer.visualize_frame(
                 frame_id=frame_id,
                 images=left_images,
-                pose=odom_pose,
                 observations_main_cam=left_observations,
-                trajectory=trajectory,
-                timestamp=all_timestamps[0]
+                slam_pose=slam_pose,
+                slam_trajectory=slam_trajectory,
+                timestamp=all_timestamps[0],
+                final_landmarks=tracker.get_final_landmarks(),
+                loop_closure_poses=(
+                    loop_closure_poses if loop_closure_poses else None
+                ),
             )
             
             # Store current timestamp for next iteration
             prev_timestamp = deepcopy(all_timestamps[0])
 
     finally:
-        # Stop streaming from all cameras
+        odom_logger.close()
         for pipeline in pipelines:
             pipeline.stop()
 

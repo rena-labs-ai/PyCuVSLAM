@@ -2,19 +2,27 @@ import queue
 import threading
 from abc import ABC, abstractmethod
 from copy import deepcopy
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pyrealsense2 as rs
+import yaml
 
 import cuvslam as vslam
 
 from cuvslam_examples.realsense import TrackingResult
-from cuvslam_examples.realsense.camera_utils import get_rs_stereo_rig, get_rs_vio_rig
+from cuvslam_examples.realsense.camera_utils import (
+    configure_device,
+    get_camera_intrinsics,
+    get_rs_multi_rig,
+    get_rs_stereo_rig,
+    get_rs_vio_rig,
+    setup_pipeline,
+)
 from cuvslam_examples.realsense.utils import Landmark, Pose
 
 RESOLUTION = (640, 360)
-FPS = 15
+FPS = 30
 WARMUP_FRAMES = 60
 IMAGE_JITTER_THRESHOLD_NS = ((1000 / FPS) + 2) * 1e6
 IMU_FREQUENCY_ACCEL = 100
@@ -404,3 +412,163 @@ class VioTracker(BaseTracker):
                 ts.last_low_rate_timestamp = current_timestamp
         except Exception as e:
             print(f"Camera thread error: {e}")
+
+
+MULTI_CAM_CONFIG_FILE = (
+    "src/rena_dependencies/pycuvslam/cuvslam_examples/"
+    "cuvslam_examples/realsense/frame_agx_rig.yaml"
+)
+SYNC_MATCHING_THRESHOLD_NS = 20 * 1e6
+
+
+class MultiCameraTracker(BaseTracker):
+    """Multi-camera stereo tracking strategy using hardware-synced RealSense rigs."""
+
+    def __init__(self, config_file: str = MULTI_CAM_CONFIG_FILE) -> None:
+        self._config_file = config_file
+        self._pipelines: List[rs.pipeline] = []
+        self._configs: List[rs.config] = []
+        self._running = False
+        self._stereo_cameras: List[Dict] = []
+
+    def setup_camera_parameters(self) -> Dict[str, Dict]:
+        with open(self._config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+
+        self._stereo_cameras = config_data["stereo_cameras"]
+        serial_numbers = [cam["serial"] for cam in self._stereo_cameras]
+
+        self._pipelines = []
+        self._configs = []
+        for serial in serial_numbers:
+            pipeline, config = setup_pipeline(serial, fps=FPS)
+            self._pipelines.append(pipeline)
+            self._configs.append(config)
+
+        camera_params: Dict[str, Dict] = {}
+        for i, (pipeline, config, stereo_cam) in enumerate(
+            zip(self._pipelines, self._configs, self._stereo_cameras)
+        ):
+            left_intrinsics, right_intrinsics = get_camera_intrinsics(pipeline, config)
+            camera_params[f"camera_{i + 1}"] = {
+                "left": {
+                    "intrinsics": left_intrinsics,
+                    "extrinsics": stereo_cam["left_camera"]["transform"],
+                },
+                "right": {
+                    "intrinsics": right_intrinsics,
+                    "extrinsics": stereo_cam["right_camera"]["transform"],
+                },
+            }
+
+        return camera_params
+
+    def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
+        return vslam.Tracker.OdometryConfig(
+            async_sba=False,
+            enable_final_landmarks_export=True,
+            horizontal_stereo_camera=True,
+        )
+
+    def create_rig(self, camera_params: dict) -> vslam.Rig:
+        return get_rs_multi_rig(camera_params)
+
+    def create_slam_config(self) -> vslam.Tracker.SlamConfig:
+        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+
+    def start_streaming(
+        self, tracker: vslam.Tracker, output_queue: queue.Queue
+    ) -> None:
+        configure_device(
+            self._pipelines[0], self._configs[0], is_master=True
+        )
+        for pipeline, config in zip(self._pipelines[1:], self._configs[1:]):
+            configure_device(pipeline, config, is_master=False)
+
+        for pipeline, config in zip(self._pipelines, self._configs):
+            pipeline.start(config)
+
+        self._running = True
+        threading.Thread(
+            target=self._spin,
+            args=(tracker, output_queue),
+            daemon=True,
+        ).start()
+
+    def stop_streaming(self) -> None:
+        self._running = False
+        for pipeline in self._pipelines:
+            pipeline.stop()
+
+    def _spin(
+        self, tracker: vslam.Tracker, output_queue: queue.Queue
+    ) -> None:
+        frame_id = 0
+        prev_timestamp: Optional[int] = None
+        num_cameras = len(self._pipelines)
+
+        while self._running:
+            all_timestamps: List[int] = []
+            all_images: List[np.ndarray] = []
+            skip = False
+
+            for i, pipeline in enumerate(self._pipelines):
+                frames = pipeline.wait_for_frames()
+                left_frame = frames.get_infrared_frame(1)
+                right_frame = frames.get_infrared_frame(2)
+
+                if not left_frame or not right_frame:
+                    skip = True
+                    break
+
+                all_timestamps.append(int(left_frame.timestamp * 1e6))
+                all_images.extend([
+                    np.asanyarray(left_frame.get_data()),
+                    np.asanyarray(right_frame.get_data()),
+                ])
+
+            frame_id += 1
+
+            if skip or frame_id < WARMUP_FRAMES:
+                continue
+
+            if len(all_timestamps) < num_cameras:
+                continue
+
+            if prev_timestamp is not None:
+                gap = all_timestamps[0] - prev_timestamp
+                if gap > IMAGE_JITTER_THRESHOLD_NS:
+                    print(
+                        f"Warning: Camera stream drop: gap "
+                        f"({gap / 1e6:.2f} ms) exceeds threshold "
+                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms"
+                    )
+
+            max_diff = max(
+                abs(all_timestamps[i] - all_timestamps[j])
+                for i in range(num_cameras)
+                for j in range(i + 1, num_cameras)
+            )
+            if max_diff > SYNC_MATCHING_THRESHOLD_NS:
+                print(
+                    f"Warning: Sync mismatch {max_diff / 1e6:.2f} ms "
+                    f"exceeds threshold {SYNC_MATCHING_THRESHOLD_NS / 1e6:.2f} ms"
+                )
+
+            prev_timestamp = deepcopy(all_timestamps[0])
+
+            vo_pose_estimate, slam_pose = tracker.track(
+                all_timestamps[0], tuple(all_images)
+            )
+
+            if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+                continue
+
+            output_queue.put(
+                TrackingResult(
+                    all_timestamps[0],
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    tuple(all_images),
+                )
+            )

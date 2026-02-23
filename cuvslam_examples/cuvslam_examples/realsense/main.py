@@ -7,19 +7,28 @@ from numpy import array_equal as np_array_equal
 import cuvslam as vslam
 
 from cuvslam_examples.realsense.pipeline import Pipeline
-from cuvslam_examples.realsense.tracker import BaseTracker, StereoTracker, VioTracker
+from cuvslam_examples.realsense.tracker import (
+    BaseTracker,
+    StereoTracker,
+    MultiCameraTracker,
+    VioTracker,
+)
 from cuvslam_examples.realsense.utils import OdomLogger, Pose
 from cuvslam_examples.realsense.visualizer import RerunVisualizer
 
 TRACKERS = {
     "stereo": StereoTracker,
     "vio": VioTracker,
+    "multicam": MultiCameraTracker,
 }
 
 
 def run(tracker: BaseTracker) -> None:
+    is_multicam = isinstance(tracker, MultiCameraTracker)
+    num_viz_cameras = len(tracker._stereo_cameras) if is_multicam else 1
+
     with Pipeline(tracker) as pipeline:
-        visualizer = RerunVisualizer()
+        visualizer = RerunVisualizer(num_viz_cameras=num_viz_cameras)
         odom_logger = OdomLogger()
 
         frame_id = 0
@@ -57,10 +66,19 @@ def run(tracker: BaseTracker) -> None:
                 ):
                     loop_closure_poses.append(current_lc_poses[-1].pose.translation)
 
+                left_images = [
+                    result.images[i] for i in range(0, len(result.images), 2)
+                ] if is_multicam else [result.images[0]]
+
+                left_observations = [
+                    pipeline.tracker.get_last_observations(i)
+                    for i in range(0, len(result.images), 2)
+                ] if is_multicam else [pipeline.tracker.get_last_observations(0)]
+
                 visualizer.visualize_frame(
                     frame_id=frame_id,
-                    images=[result.images[0]],
-                    observations_main_cam=[pipeline.tracker.get_last_observations(0)],
+                    images=left_images,
+                    observations_main_cam=left_observations,
                     slam_pose=result.slam_pose,
                     slam_trajectory=slam_trajectory,
                     timestamp=result.timestamp,
