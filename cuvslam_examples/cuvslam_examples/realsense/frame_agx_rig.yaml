@@ -1,26 +1,38 @@
 #     Jetson AGX Frame Rig
 
-stereo_cameras:
+stereo_cameras:  
   - serial: '242422303248' # front
     left_camera:
       transform:
         - [1, 0, 0, -0.0475]
         - [0, 1, 0, 0]
-        - [0, 0, 1, 0.025]
+        - [0, 0, 1, 0]
     right_camera:
       transform:
-        - [1, 0, 0, 0.0475]
+        - [1, 0, 0, +0.0475]
         - [0, 1, 0, 0]
-        - [0, 0, 1, 0.025]
+        - [0, 0, 1, 0]
 
-  - serial: '339522301389' # back
+  - serial: '146222250568' # left
     left_camera:
       transform:
-        - [-1, 0, 0, 0.0335]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, -0.025]
+        - [0.5,    0, 0.866, -0.1611] # middle -0.1161 - 0.045 (half of distance between left and right IR cameras)
+        - [0,      1,  0,     0]
+        - [-0.866,  0,  0.5,   -0.0706] # middle -0.0706
     right_camera:
       transform:
-        - [-1, 0, 0, -0.0615]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, -0.025]
+        - [0.5,    0, 0.866, -0.0711] # middle -0.1161 + 0.045
+        - [0,      1,  0,     0]
+        - [-0.866,  0,  0.5,   -0.0706] # middle -0.0706
+
+  - serial: '339522301389' # right
+    left_camera:
+      transform:
+        - [0.5,    0,  -0.866, 0.0711] # middle 0.1161 - 0.045
+        - [0,      1,  0,     0]
+        - [0.866, 0,  0.5,   -0.0706] # middle -0.0706
+    right_camera:
+      transform:
+        - [0.5,    0,  -0.866, 0.1611] # middle 0.1161 + 0.045
+        - [0,      1,  0,     0]
+        - [0.866, 0,  0.5,   -0.0706] # middle -0.0706

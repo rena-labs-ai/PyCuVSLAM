@@ -1,0 +1,39 @@
+# Galileo rig - extrinsics from TF (base_link -> *_optical)
+# tf2_echo base_link <camera>_stereo_camera_<left|right>_optical
+
+stereo_cameras:
+  - camera: 'front'
+    left_camera:
+      transform:
+        - [0.0, 0.0, 1.0, 0.093]
+        - [-1.0, 0.0, 0.0, 0.075]
+        - [0.0, -1.0, 0.0, 0.344]
+    right_camera:
+      transform:
+        - [0.0, 0.0, 1.0, 0.093]
+        - [-1.0, 0.0, 0.0, -0.075]
+        - [0.0, -1.0, 0.0, 0.344]
+
+  - camera: 'right'
+    left_camera:
+      transform:
+        - [-1.0, 0.0, 0.0, -0.280]
+        - [0.0, 0.0, -1.0, -0.143]
+        - [0.0, -1.0, 0.0, 0.344]
+    right_camera:
+      transform:
+        - [-1.0, 0.0, 0.0, -0.430]
+        - [0.0, 0.0, -1.0, -0.143]
+        - [0.0, -1.0, 0.0, 0.344]
+
+  - camera: 'left'
+    left_camera:
+      transform:
+        - [1.0, 0.0, 0.0, -0.430]
+        - [0.0, 0.0, 1.0, 0.143]
+        - [0.0, -1.0, 0.0, 0.344]
+    right_camera:
+      transform:
+        - [1.0, 0.0, 0.0, -0.280]
+        - [0.0, 0.0, 1.0, 0.143]
+        - [0.0, -1.0, 0.0, 0.344]
