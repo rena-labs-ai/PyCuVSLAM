@@ -25,8 +25,8 @@ from cuvslam_examples.realsense.utils import Landmark, Pose
 
 SERIAL_NUMBER = "242422303248"
 RESOLUTION = (640, 480)
-FPS = 15
-IR_EXPOSURE_US = 100000  # Manual exposure in µs for IR stereo
+FPS = 30
+IR_EXPOSURE_US = 10000  # Manual exposure in µs for IR stereo
 WARMUP_FRAMES = 60
 IMAGE_JITTER_THRESHOLD_NS = ((1000 / FPS) + 2) * 1e6
 IMU_FREQUENCY_ACCEL = 100
@@ -198,30 +198,30 @@ class StereoTracker(BaseTracker):
             if frame_id <= WARMUP_FRAMES:
                 continue
 
-            # vo_pose_estimate, slam_pose = tracker.track(timestamp, images)
+            vo_pose_estimate, slam_pose = tracker.track(timestamp, images)
 
-            # if vo_pose_estimate.world_from_rig is None:
-            #     print("Warning: VO pose tracking not valid")
-            #     continue
+            if vo_pose_estimate.world_from_rig is None:
+                print("Warning: VO pose tracking not valid")
+                continue
 
-            # if slam_pose is None:
-            #     print("Warning: SLAM pose tracking not valid")
-            #     continue
+            if slam_pose is None:
+                print("Warning: SLAM pose tracking not valid")
+                continue
 
-            # landmarks = [
-            #     Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
-            # ]
-            # print("slam_pose x:", slam_pose.translation[0], "y:", slam_pose.translation[1], "z:", slam_pose.translation[2], flush=True)
+            landmarks = [
+                Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
+            ]
+            print("slam_pose x:", slam_pose.translation[0], "y:", slam_pose.translation[1], "z:", slam_pose.translation[2], flush=True)
 
-            # output_queue.put(
-            #     TrackingResult(
-            #         timestamp,
-            #         Pose(vo_pose_estimate.world_from_rig.pose),
-            #         Pose(slam_pose),
-            #         images,
-            #         [],
-            #     )
-            # )
+            output_queue.put(
+                TrackingResult(
+                    timestamp,
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    images,
+                    [],
+                )
+            )
 
 
 class _TimestampTracker:
@@ -594,7 +594,8 @@ class MultiCameraTracker(BaseTracker):
                     print(
                         f"Warning: Camera stream drop: gap "
                         f"({gap / 1e6:.2f} ms) exceeds threshold "
-                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms"
+                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms",
+                        flush=True,
                     )
 
             max_diff = max(
@@ -605,7 +606,8 @@ class MultiCameraTracker(BaseTracker):
             if max_diff > SYNC_MATCHING_THRESHOLD_NS:
                 print(
                     f"Warning: Sync mismatch {max_diff / 1e6:.2f} ms "
-                    f"exceeds threshold {SYNC_MATCHING_THRESHOLD_NS / 1e6:.2f} ms"
+                    f"exceeds threshold {SYNC_MATCHING_THRESHOLD_NS / 1e6:.2f} ms",
+                    flush=True,
                 )
 
             prev_timestamp = deepcopy(all_timestamps[0])
