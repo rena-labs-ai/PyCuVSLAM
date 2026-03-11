@@ -458,7 +458,7 @@ class VioTracker(BaseTracker):
 
 MULTI_CAM_CONFIG_FILE = (
     "src/rena_dependencies/pycuvslam/cuvslam_examples/"
-    "cuvslam_examples/realsense/frame_agx_rig.yaml"
+    "cuvslam_examples/realsense/frame_agx_rig_cardbox.yaml"
 )
 SYNC_MATCHING_THRESHOLD_NS = 40 * 1e6
 
@@ -472,6 +472,8 @@ class MultiCameraTracker(BaseTracker):
         self._configs: List[rs.config] = []
         self._running = False
         self._stereo_cameras: List[Dict] = []
+        self._jitter_lock = threading.Lock()
+        self._jitter_points: List[tuple] = []
 
     @property
     def num_viz_cameras(self) -> int:
@@ -531,6 +533,12 @@ class MultiCameraTracker(BaseTracker):
     def create_slam_config(self) -> vslam.Tracker.SlamConfig:
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
+    def drain_jitter_points(self) -> List[tuple]:
+        with self._jitter_lock:
+            pts = list(self._jitter_points)
+            self._jitter_points.clear()
+            return pts
+
     def start_streaming(
         self, tracker: vslam.Tracker, output_queue: queue.Queue
     ) -> None:
@@ -556,6 +564,7 @@ class MultiCameraTracker(BaseTracker):
     def _spin(self, tracker: vslam.Tracker, output_queue: queue.Queue) -> None:
         frame_id = 0
         prev_timestamp: Optional[int] = None
+        last_slam_xy: Optional[tuple] = None
         num_cameras = len(self._pipelines)
 
         while self._running:
@@ -591,12 +600,16 @@ class MultiCameraTracker(BaseTracker):
             if prev_timestamp is not None:
                 gap = all_timestamps[0] - prev_timestamp
                 if gap > IMAGE_JITTER_THRESHOLD_NS:
+                    pos = f" at cuvslam ({last_slam_xy[0]:.3f}, {last_slam_xy[1]:.3f})" if last_slam_xy else ""
                     print(
                         f"Warning: Camera stream drop: gap "
                         f"({gap / 1e6:.2f} ms) exceeds threshold "
-                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms",
+                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms{pos}",
                         flush=True,
                     )
+                    if last_slam_xy:
+                        with self._jitter_lock:
+                            self._jitter_points.append(last_slam_xy)
 
             max_diff = max(
                 abs(all_timestamps[i] - all_timestamps[j])
@@ -618,6 +631,9 @@ class MultiCameraTracker(BaseTracker):
 
             if vo_pose_estimate.world_from_rig is None or slam_pose is None:
                 continue
+
+            rf = Pose(slam_pose).to_robot_frame()
+            last_slam_xy = (rf.translation[0], rf.translation[1])
 
             output_queue.put(
                 TrackingResult(
