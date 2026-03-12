@@ -18,8 +18,8 @@ from scipy.spatial.transform import Rotation
 import cuvslam as vslam
 
 # Constants
-DEFAULT_RESOLUTION = (640, 360)
-DEFAULT_FPS = 30
+DEFAULT_RESOLUTION = (640, 360) # (1280, 800)
+DEFAULT_FPS = 90
 IR_EXPOSURE_US = 10000
 DEFAULT_IMU_FREQUENCY = 200
 

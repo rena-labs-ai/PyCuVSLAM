@@ -1,5 +1,5 @@
 import queue
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 import rerun as rr
@@ -23,12 +23,14 @@ class Pipeline:
         inner: BaseTracker,
         queue_maxsize: int = 2,
         enable_visualization: bool = False,
+        get_latest_fast_lio: Optional[Callable[[], Optional[object]]] = None,
     ) -> None:
         self._inner = inner
         self._queue: queue.Queue[TrackingResult] = queue.Queue(maxsize=queue_maxsize)
         self._tracker: Optional[vslam.Tracker] = None
         self._odometry_config: Optional[vslam.Tracker.OdometryConfig] = None
         self._enable_visualization = enable_visualization
+        self._get_latest_fast_lio = get_latest_fast_lio
         self._trajectory: List[np.ndarray] = []
         self._frame_id = 0
 
@@ -54,7 +56,10 @@ class Pipeline:
         self._tracker = vslam.Tracker(rig, self._odometry_config, slam_cfg)
         if self._enable_visualization:
             self._init_rerun()
-        self._inner.start_streaming(self._tracker, self._queue)
+        kwargs = {}
+        if self._get_latest_fast_lio is not None:
+            kwargs["get_latest_fast_lio"] = self._get_latest_fast_lio
+        self._inner.start_streaming(self._tracker, self._queue, **kwargs)
 
     def _init_rerun(self) -> None:
         rr.init("cuVSLAM Pipeline", spawn=True)

@@ -3,7 +3,7 @@ import threading
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pyrealsense2 as rs
@@ -24,14 +24,21 @@ from cuvslam_examples.realsense.camera_utils import (
 from cuvslam_examples.realsense.utils import Landmark, Pose
 
 SERIAL_NUMBER = "242422303248"
-RESOLUTION = (640, 480)
+RESOLUTION = (640, 360) # (1280, 800)
 FPS = 30
 IR_EXPOSURE_US = 10000  # Manual exposure in µs for IR stereo
-WARMUP_FRAMES = 60
+WARMUP_FRAMES = 500
 IMAGE_JITTER_THRESHOLD_NS = ((1000 / FPS) + 2) * 1e6
 IMU_FREQUENCY_ACCEL = 100
 IMU_FREQUENCY_GYRO = 200
 IMU_JITTER_THRESHOLD_NS = 12 * 1e6
+
+MULTI_CAM_CONFIG_FILE = (
+    "src/rena_dependencies/pycuvslam/cuvslam_examples/"
+    "cuvslam_examples/realsense/frame_agx_rig.yaml"
+)
+SYNC_MATCHING_THRESHOLD_NS = 50 * 1e6
+
 
 
 class BaseTracker(ABC):
@@ -55,7 +62,7 @@ class BaseTracker(ABC):
 
     @abstractmethod
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None: ...
 
     @abstractmethod
@@ -123,7 +130,7 @@ class StereoTracker(BaseTracker):
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         self._pipeline = rs.pipeline()
         config = rs.config()
@@ -211,7 +218,15 @@ class StereoTracker(BaseTracker):
             landmarks = [
                 Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
             ]
-            print("slam_pose x:", slam_pose.translation[0], "y:", slam_pose.translation[1], "z:", slam_pose.translation[2], flush=True)
+            print(
+                "slam_pose x:",
+                slam_pose.translation[0],
+                "y:",
+                slam_pose.translation[1],
+                "z:",
+                slam_pose.translation[2],
+                flush=True,
+            )
 
             output_queue.put(
                 TrackingResult(
@@ -295,7 +310,7 @@ class VioTracker(BaseTracker):
         return vslam.Tracker.SlamConfig(sync_mode=True, planar_constraints=True)
 
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         self._ir_pipe = rs.pipeline()
         ir_config = rs.config()
@@ -456,13 +471,6 @@ class VioTracker(BaseTracker):
             print(f"Camera thread error: {e}")
 
 
-MULTI_CAM_CONFIG_FILE = (
-    "src/rena_dependencies/pycuvslam/cuvslam_examples/"
-    "cuvslam_examples/realsense/frame_agx_rig_cardbox.yaml"
-)
-SYNC_MATCHING_THRESHOLD_NS = 40 * 1e6
-
-
 class MultiCameraTracker(BaseTracker):
     """Multi-camera stereo tracking strategy using hardware-synced RealSense rigs."""
 
@@ -540,8 +548,11 @@ class MultiCameraTracker(BaseTracker):
             return pts
 
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
+        get_latest_fast_lio: Optional[Callable[[], Optional[object]]] = kwargs.get(
+            "get_latest_fast_lio"
+        )
         configure_device(self._pipelines[0], self._configs[0], is_master=True)
         for pipeline, config in zip(self._pipelines[1:], self._configs[1:]):
             configure_device(pipeline, config, is_master=False)
@@ -550,8 +561,14 @@ class MultiCameraTracker(BaseTracker):
             pipeline.start(config)
 
         self._running = True
+        self._raw_queue: queue.Queue = queue.Queue(maxsize=4)
         threading.Thread(
-            target=self._spin,
+            target=self._camera_loop,
+            args=(get_latest_fast_lio,),
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._tracker_loop,
             args=(tracker, output_queue),
             daemon=True,
         ).start()
@@ -561,7 +578,9 @@ class MultiCameraTracker(BaseTracker):
         for pipeline in self._pipelines:
             pipeline.stop()
 
-    def _spin(self, tracker: vslam.Tracker, output_queue: queue.Queue) -> None:
+    def _camera_loop(
+        self, get_latest_fast_lio: Optional[Callable[[], Optional[object]]]
+    ) -> None:
         frame_id = 0
         prev_timestamp: Optional[int] = None
         last_slam_xy: Optional[tuple] = None
@@ -597,19 +616,17 @@ class MultiCameraTracker(BaseTracker):
             if len(all_timestamps) < num_cameras:
                 continue
 
+            ts = all_timestamps[0]
             if prev_timestamp is not None:
-                gap = all_timestamps[0] - prev_timestamp
+                gap = ts - prev_timestamp
                 if gap > IMAGE_JITTER_THRESHOLD_NS:
-                    pos = f" at cuvslam ({last_slam_xy[0]:.3f}, {last_slam_xy[1]:.3f})" if last_slam_xy else ""
                     print(
-                        f"Warning: Camera stream drop: gap "
+                        f"Warning: [camera_loop] Raw frame jitter: gap "
                         f"({gap / 1e6:.2f} ms) exceeds threshold "
-                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms{pos}",
+                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms",
                         flush=True,
                     )
-                    if last_slam_xy:
-                        with self._jitter_lock:
-                            self._jitter_points.append(last_slam_xy)
+            prev_timestamp = ts
 
             max_diff = max(
                 abs(all_timestamps[i] - all_timestamps[j])
@@ -623,11 +640,56 @@ class MultiCameraTracker(BaseTracker):
                     flush=True,
                 )
 
-            prev_timestamp = deepcopy(all_timestamps[0])
+            synced_odom = None
+            if get_latest_fast_lio is not None:
+                synced_odom = get_latest_fast_lio()
 
-            vo_pose_estimate, slam_pose = tracker.track(
-                all_timestamps[0], tuple(all_images)
-            )
+            try:
+                self._raw_queue.put_nowait(
+                    (all_timestamps[0], tuple(all_images), synced_odom)
+                )
+            except queue.Full:
+                pass
+
+    def _tracker_loop(self, tracker: vslam.Tracker, output_queue: queue.Queue) -> None:
+        prev_timestamp: Optional[int] = None
+        last_slam_xy: Optional[tuple] = None
+        num_cameras = len(self._pipelines)
+
+        while self._running:
+            try:
+                raw = self._raw_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            backlog = self._raw_queue.qsize()
+            if backlog > 0:
+                print(f"[tracker_loop] raw_queue backlog={backlog}", flush=True)
+
+            timestamp, all_images, synced_odom = raw
+
+            if prev_timestamp is not None:
+                gap = timestamp - prev_timestamp
+                if gap > IMAGE_JITTER_THRESHOLD_NS:
+                    pos = (
+                        f" at cuvslam ({last_slam_xy[0]:.3f}, {last_slam_xy[1]:.3f})"
+                        if last_slam_xy
+                        else ""
+                    )
+                    print(
+                        f"Warning: Raw frame jitter (camera/queue drop): gap "
+                        f"({gap / 1e6:.2f} ms) exceeds threshold "
+                        f"{IMAGE_JITTER_THRESHOLD_NS / 1e6:.2f} ms{pos} "
+                        "(SLAM track is not lagging)",
+                        flush=True,
+                    )
+                    if last_slam_xy:
+                        with self._jitter_lock:
+                            self._jitter_points.append(last_slam_xy)
+
+            prev_timestamp = timestamp
+
+            vo_pose_estimate, slam_pose = tracker.track(timestamp, all_images)
 
             if vo_pose_estimate.world_from_rig is None or slam_pose is None:
                 continue
@@ -637,18 +699,17 @@ class MultiCameraTracker(BaseTracker):
 
             output_queue.put(
                 TrackingResult(
-                    all_timestamps[0],
+                    timestamp,
                     Pose(vo_pose_estimate.world_from_rig.pose),
                     Pose(slam_pose),
-                    tuple(all_images),
+                    all_images,
+                    synced_odom=synced_odom,
                 )
             )
 
 
 BAG_SYNC_THRESHOLD_NS = 50 * 1e6  # 50 ms (matches ApproximateTime slop)
-DEFAULT_BAG_CONFIG_FILE = str(
-    Path(__file__).parent / "frame_agx_rig.yaml"
-)
+DEFAULT_BAG_CONFIG_FILE = str(Path(__file__).parent / "frame_agx_rig.yaml")
 
 
 def _stereo_topic_base(cam: Dict, prefix: str) -> str:
@@ -734,14 +795,12 @@ class MultiCamBagTracker(BaseTracker):
         id_to_cam = {_stereo_camera_id(c): c for c in all_stereo}
         filter_ids = self._serial_numbers or self._camera_names
         if filter_ids is not None:
-            self._stereo_cameras = [
-                id_to_cam[i] for i in filter_ids if i in id_to_cam
-            ]
+            self._stereo_cameras = [id_to_cam[i] for i in filter_ids if i in id_to_cam]
             if len(self._stereo_cameras) != len(filter_ids):
-                missing = set(filter_ids) - {_stereo_camera_id(c) for c in self._stereo_cameras}
-                raise ValueError(
-                    f"Cameras {missing} not found in {self._config_file}"
-                )
+                missing = set(filter_ids) - {
+                    _stereo_camera_id(c) for c in self._stereo_cameras
+                }
+                raise ValueError(f"Cameras {missing} not found in {self._config_file}")
         else:
             self._stereo_cameras = all_stereo
 
@@ -799,6 +858,7 @@ class MultiCamBagTracker(BaseTracker):
         print(f"[multicam_bag] Waiting for CameraInfo on {len(topic_map)} topics...")
         node = CameraInfoCollector(topic_map)
         import time
+
         deadline = time.time() + 30.0
         while not node.has_all() and time.time() < deadline:
             rclpy.spin_once(node, timeout_sec=0.5)
@@ -808,9 +868,7 @@ class MultiCamBagTracker(BaseTracker):
 
         if not all(v is not None for v in msgs.values()):
             missing = [k for k, v in msgs.items() if v is None]
-            raise TimeoutError(
-                f"Did not receive CameraInfo for: {missing} within 30s"
-            )
+            raise TimeoutError(f"Did not receive CameraInfo for: {missing} within 30s")
         print(f"[multicam_bag] CameraInfo received for {self._num_cameras} cameras")
 
         camera_params: Dict[str, Dict] = {}
@@ -821,12 +879,20 @@ class MultiCamBagTracker(BaseTracker):
             assert left_msg is not None and right_msg is not None
 
             left_intrinsics = _make_intrinsics_like(
-                left_msg.k[0], left_msg.k[4], left_msg.k[2], left_msg.k[5],
-                left_msg.width, left_msg.height,
+                left_msg.k[0],
+                left_msg.k[4],
+                left_msg.k[2],
+                left_msg.k[5],
+                left_msg.width,
+                left_msg.height,
             )
             right_intrinsics = _make_intrinsics_like(
-                right_msg.k[0], right_msg.k[4], right_msg.k[2], right_msg.k[5],
-                right_msg.width, right_msg.height,
+                right_msg.k[0],
+                right_msg.k[4],
+                right_msg.k[2],
+                right_msg.k[5],
+                right_msg.width,
+                right_msg.height,
             )
             camera_params[f"camera_{i + 1}"] = {
                 "left": {
@@ -858,7 +924,7 @@ class MultiCamBagTracker(BaseTracker):
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         import rclpy
         from rclpy.node import Node
@@ -890,13 +956,23 @@ class MultiCamBagTracker(BaseTracker):
                     base = outer._camera_topic_bases[i]
                     left_topic = f"{base}/{outer._left_ir_topic}"
                     right_topic = f"{base}/{outer._right_ir_topic}"
-                    subs.append(Subscriber(inner_self, img_msg_type, left_topic, qos_profile=qos))
-                    subs.append(Subscriber(inner_self, img_msg_type, right_topic, qos_profile=qos))
+                    subs.append(
+                        Subscriber(
+                            inner_self, img_msg_type, left_topic, qos_profile=qos
+                        )
+                    )
+                    subs.append(
+                        Subscriber(
+                            inner_self, img_msg_type, right_topic, qos_profile=qos
+                        )
+                    )
                     print(f"[multicam_bag] Subscribed: {left_topic}, {right_topic}")
 
                 inner_self._frame_count = 0
                 inner_self._img_counts = [0] * (outer._num_cameras * 2)
-                print(f"[multicam_bag] Sync slop={outer._sync_slop}s (increase with --sync-slop if no frames)")
+                print(
+                    f"[multicam_bag] Sync slop={outer._sync_slop}s (increase with --sync-slop if no frames)"
+                )
                 inner_self._sync = ApproximateTimeSynchronizer(
                     subs, queue_size=30, slop=outer._sync_slop
                 )
@@ -905,7 +981,9 @@ class MultiCamBagTracker(BaseTracker):
                 def make_count_cb(idx):
                     def _cb(msg):
                         inner_self._img_counts[idx] += 1
+
                     return _cb
+
                 for i in range(outer._num_cameras):
                     base = outer._camera_topic_bases[i]
                     lt = f"{base}/{outer._left_ir_topic}"
@@ -944,9 +1022,9 @@ class MultiCamBagTracker(BaseTracker):
                         if img is None:
                             return
                     else:
-                        img = np.frombuffer(
-                            msg.data, dtype=np.uint8
-                        ).reshape(msg.height, msg.step)[:, : msg.width]
+                        img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                            msg.height, msg.step
+                        )[:, : msg.width]
                     if len(img.shape) == 3:
                         img = img[:, :, 0]
                     images.append(np.asarray(img))
@@ -1000,6 +1078,7 @@ class MultiCamBagTracker(BaseTracker):
         def spin():
             try:
                 import rclpy
+
                 while self._running and rclpy.ok():
                     rclpy.spin_once(node, timeout_sec=0.1)
             except Exception as e:
@@ -1092,7 +1171,7 @@ class RGBDTracker(BaseTracker):
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
     def start_streaming(
-        self, tracker: vslam.Tracker, output_queue: queue.Queue
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         self._pipeline = rs.pipeline()
         config = rs.config()
