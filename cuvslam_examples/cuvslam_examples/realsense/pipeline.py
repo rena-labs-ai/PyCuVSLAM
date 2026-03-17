@@ -2,13 +2,13 @@ import queue
 from typing import Callable, List, Optional
 
 import numpy as np
-import rerun as rr
-import rerun.blueprint as rrb
+from numpy import array_equal as np_array_equal
 
 import cuvslam as vslam
 
 from cuvslam_examples.realsense import TrackingResult
 from cuvslam_examples.realsense.tracker import BaseTracker
+from cuvslam_examples.realsense.visualizer import RerunVisualizer
 
 
 class Pipeline:
@@ -32,7 +32,9 @@ class Pipeline:
         self._enable_visualization = enable_visualization
         self._get_latest_fast_lio = get_latest_fast_lio
         self._trajectory: List[np.ndarray] = []
+        self._loop_closure_poses: List[np.ndarray] = []
         self._frame_id = 0
+        self._visualizer: Optional[RerunVisualizer] = None
 
     def start(self) -> None:
         camera_params = self._inner.setup_camera_parameters()
@@ -55,59 +57,53 @@ class Pipeline:
         slam_cfg = self._inner.create_slam_config()
         self._tracker = vslam.Tracker(rig, self._odometry_config, slam_cfg)
         if self._enable_visualization:
-            self._init_rerun()
+            self._visualizer = RerunVisualizer(num_viz_cameras=self._inner.num_viz_cameras)
         kwargs = {}
         if self._get_latest_fast_lio is not None:
             kwargs["get_latest_fast_lio"] = self._get_latest_fast_lio
         self._inner.start_streaming(self._tracker, self._queue, **kwargs)
 
-    def _init_rerun(self) -> None:
-        rr.init("cuVSLAM Pipeline", spawn=True)
-        rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_DOWN, static=True)
-        num_cams = self._inner.num_viz_cameras
-        rr.send_blueprint(
-            rrb.Blueprint(
-                rrb.TimePanel(state="collapsed"),
-                rrb.Horizontal(
-                    column_shares=[0.4, 0.6],
-                    contents=[
-                        rrb.Vertical(
-                            contents=[
-                                rrb.Spatial2DView(origin=f"world/camera_{i}")
-                                for i in range(num_cams)
-                            ]
-                        ),
-                        rrb.Spatial3DView(origin="world"),
-                    ],
-                ),
-            ),
-            make_active=True,
-        )
-
     def _visualize(self, result: TrackingResult) -> None:
-        if result.slam_pose is None:
+        if result.slam_pose is None or self._visualizer is None:
             return
         self._frame_id += 1
         self._trajectory.append(np.array(result.slam_pose.translation))
 
-        rr.set_time_sequence("frame", self._frame_id)
-        rr.log("world/slam_trajectory", rr.LineStrips3D(self._trajectory), static=True)
-        rr.log(
-            "world/camera_0",
-            rr.Transform3D(
-                translation=result.slam_pose.translation,
-                quaternion=result.slam_pose.rotation,
+        current_lc = self._tracker.get_loop_closure_poses()
+        if current_lc and (
+            not self._loop_closure_poses
+            or not np_array_equal(
+                current_lc[-1].pose.translation, self._loop_closure_poses[-1]
+            )
+        ):
+            self._loop_closure_poses.append(current_lc[-1].pose.translation)
+
+        gravity = None
+        if (
+            hasattr(self._odometry_config, "odometry_mode")
+            and self._odometry_config.odometry_mode
+            == vslam.Tracker.OdometryMode.Inertial
+        ):
+            gravity = self._tracker.get_last_gravity()
+
+        viz_img_idx = self._inner.get_viz_image_indices()
+        viz_obs_idx = self._inner.get_viz_observation_indices()
+        images = [result.images[i] for i in viz_img_idx]
+        observations = [self._tracker.get_last_observations(i) for i in viz_obs_idx]
+
+        self._visualizer.visualize_frame(
+            frame_id=self._frame_id,
+            images=images,
+            observations_main_cam=observations,
+            slam_pose=result.slam_pose,
+            slam_trajectory=self._trajectory,
+            timestamp=result.timestamp,
+            gravity=gravity,
+            final_landmarks=self._tracker.get_final_landmarks(),
+            loop_closure_poses=(
+                self._loop_closure_poses if self._loop_closure_poses else None
             ),
         )
-
-        viz_idx = self._inner.get_viz_image_indices()
-        for i, img_idx in enumerate(viz_idx):
-            if img_idx < len(result.images):
-                img = result.images[img_idx]
-                if img.dtype == np.uint8:
-                    rr.log(f"world/camera_{i}", rr.Image(img).compress())
-                else:
-                    rr.log(f"world/camera_{i}", rr.Image(img))
 
     def stop(self) -> None:
         self._inner.stop_streaming()

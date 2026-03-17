@@ -912,6 +912,7 @@ class RosMulticamTracker(BaseTracker):
         return vslam.Tracker.OdometryConfig(
             async_sba=False,
             enable_final_landmarks_export=True,
+            enable_observations_export=True,
             rectified_stereo_camera=True,
         )
 
