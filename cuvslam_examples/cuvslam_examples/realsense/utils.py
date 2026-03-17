@@ -5,7 +5,7 @@ from typing import Optional, List, Tuple
 import cuvslam as vslam
 
 
-DEFAULT_ODOM_LOG_PATH = "/mnt/jetson_data/rena-control/odom.log"
+DEFAULT_ODOM_LOG_PATH = "./odom.log"
 DEFAULT_ODOM_LOG_INTERVAL_S = 2.0
 
 

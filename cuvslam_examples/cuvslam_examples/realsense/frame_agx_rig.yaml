@@ -88,14 +88,14 @@ stereo_cameras:
         - [0, 1, 0, 0]
         - [1, 0, 0, 0.1065]
 
-  - serial: '419522072355' # back camera
-    left_camera:
-      transform:
-        - [-1, 0, 0, 0.025]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, 0.133]
-    right_camera:
-      transform:
-        - [-1, 0, 0, -0.025]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, 0.133]
+  # - serial: '419522072355' # back camera
+  #   left_camera:
+  #     transform:
+  #       - [-1, 0, 0, 0.025]
+  #       - [0, 1, 0, 0]
+  #       - [0, 0, -1, 0.133]
+  #   right_camera:
+  #     transform:
+  #       - [-1, 0, 0, -0.025]
+  #       - [0, 1, 0, 0]
+  #       - [0, 0, -1, 0.133]

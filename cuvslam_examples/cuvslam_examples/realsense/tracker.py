@@ -3,7 +3,9 @@ import threading
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
+import time
+
 
 import numpy as np
 import pyrealsense2 as rs
@@ -34,10 +36,10 @@ IMU_FREQUENCY_GYRO = 200
 IMU_JITTER_THRESHOLD_NS = 12 * 1e6
 
 MULTI_CAM_CONFIG_FILE = (
-    "src/rena_dependencies/pycuvslam/cuvslam_examples/"
+    "./cuvslam_examples/"
     "cuvslam_examples/realsense/frame_agx_rig.yaml"
 )
-SYNC_MATCHING_THRESHOLD_NS = 50 * 1e6
+SYNC_MATCHING_THRESHOLD_NS = 100 * 1e6
 
 
 
@@ -117,7 +119,7 @@ class StereoTracker(BaseTracker):
             async_sba=True,
             enable_final_landmarks_export=True,
             enable_observations_export=True,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -297,7 +299,7 @@ class VioTracker(BaseTracker):
             enable_final_landmarks_export=True,
             debug_imu_mode=False,
             odometry_mode=vslam.Tracker.OdometryMode.Inertial,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -529,7 +531,7 @@ class MultiCameraTracker(BaseTracker):
         return vslam.Tracker.OdometryConfig(
             async_sba=False,
             enable_final_landmarks_export=True,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -708,7 +710,271 @@ class MultiCameraTracker(BaseTracker):
             )
 
 
-BAG_SYNC_THRESHOLD_NS = 50 * 1e6  # 50 ms (matches ApproximateTime slop)
+def _decode_compressed_image(raw_bytes: bytes) -> Optional[np.ndarray]:
+    import cv2
+
+    img = cv2.imdecode(
+        np.frombuffer(raw_bytes, dtype=np.uint8), cv2.IMREAD_UNCHANGED
+    )
+    if img is None:
+        return None
+    if len(img.shape) == 3:
+        img = img[:, :, 0]
+    return img
+
+
+class _CameraInfoCollector:
+    """Accumulates CameraInfo messages keyed by topic identifier."""
+
+    def __init__(self, keys) -> None:
+        self.received = {k: None for k in keys}
+
+    def on_info(self, key: str, msg) -> None:
+        if self.received[key] is None:
+            self.received[key] = msg
+
+    def has_all(self) -> bool:
+        return all(v is not None for v in self.received.values())
+
+
+class _FrameAggregator:
+    """Collects raw compressed bytes per camera slot; when all slots are
+    filled, pops and decodes them, then calls tracker.track()."""
+
+    def __init__(
+        self,
+        num_slots: int,
+        tracker: "vslam.Tracker",
+        output_queue: queue.Queue,
+    ) -> None:
+        self._num_slots = num_slots
+        self._tracker = tracker
+        self._output_queue = output_queue
+        self._queues = [queue.Queue(maxsize=1) for _ in range(num_slots)]
+        self.frames_fed = 0
+        self._raw_images_num = [0] * num_slots
+        self._last_log_time = time.monotonic()
+
+    def on_compressed_msg(self, slot: int, msg) -> None:
+        ts = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+
+        q = self._queues[slot]
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+
+        q.put_nowait(bytes(msg.data))
+        self._raw_images_num[slot] += 1
+
+        if any(q.empty() for q in self._queues):
+            return
+
+        raw_set = [q.get_nowait() for q in self._queues]
+
+        images = [_decode_compressed_image(raw) for raw in raw_set]
+        if any(img is None for img in images):
+            print("Warning: Failed to decode image, slot:", slot, flush=True)
+            return
+
+        vo_pose_estimate, slam_pose = self._tracker.track(ts, images)
+        if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+            print("Warning: VSLAM track failed (world_from_rig or slam_pose is None)", flush=True)
+            return
+
+        self.frames_fed += 1
+        now = time.monotonic()
+        if now - self._last_log_time >= 1.0:
+            raw_str = ", ".join(f"cam_{i}: {n}" for i, n in enumerate(self._raw_images_num))
+            print(f"[ros_multicam] fed={self.frames_fed}/s raw {raw_str}", flush=True)
+            self.frames_fed = 0
+            self._raw_images_num = [0] * self._num_slots
+            self._last_log_time = now
+
+        self._output_queue.put(
+            TrackingResult(
+                ts,
+                Pose(vo_pose_estimate.world_from_rig.pose),
+                Pose(slam_pose),
+                images,
+            )
+        )
+
+
+def _spin_ros_node(node, tracker) -> None:
+    import rclpy
+
+    while tracker._running and rclpy.ok():
+        rclpy.spin_once(node, timeout_sec=0.1)
+
+
+class RosMulticamTracker(BaseTracker):
+    """Multi-camera stereo tracking from live ROS compressed topics.
+
+    Each camera topic callback stores the latest decoded image in a shared
+    slot. When all slots are filled, images are popped and passed to
+    tracker.track().
+    """
+
+    def __init__(
+        self,
+        camera_topics: List[Tuple[str, str]],
+        config_file: str,
+    ) -> None:
+        self._camera_topics = camera_topics
+        self._config_file = config_file
+        self._num_cameras = len(camera_topics)
+        self._stereo_cameras: List[Dict] = []
+        self._running = False
+
+    @property
+    def num_viz_cameras(self) -> int:
+        return self._num_cameras
+
+    def get_viz_image_indices(self) -> List[int]:
+        return list(range(0, self._num_cameras * 2, 2))
+
+    def get_viz_observation_indices(self) -> List[int]:
+        return list(range(0, self._num_cameras * 2, 2))
+
+    def setup_camera_parameters(self) -> Dict[str, Dict]:
+        import time
+        from functools import partial
+
+        import rclpy
+        from rclpy.node import Node
+        from sensor_msgs.msg import CameraInfo
+
+        with open(self._config_file, "r") as f:
+            config_data = yaml.safe_load(f)
+        self._stereo_cameras = config_data["stereo_cameras"]
+
+        if len(self._stereo_cameras) != self._num_cameras:
+            raise ValueError(
+                f"Config has {len(self._stereo_cameras)} stereo cameras "
+                f"but {self._num_cameras} topic pairs were provided"
+            )
+
+        info_topics: Dict[str, str] = {}
+        for i, (left_topic, right_topic) in enumerate(self._camera_topics):
+            info_topics[f"cam_{i}_left"] = _image_topic_to_camera_info_topic(left_topic)
+            info_topics[f"cam_{i}_right"] = _image_topic_to_camera_info_topic(right_topic)
+
+        print(f"[ros_multicam] Waiting for CameraInfo on {len(info_topics)} topics ...")
+        for key, topic in info_topics.items():
+            print(f"  {key}: {topic}")
+
+        collector = _CameraInfoCollector(info_topics.keys())
+        node = Node("ros_multicam_camera_info")
+        for key, topic in info_topics.items():
+            node.create_subscription(
+                CameraInfo, topic, partial(collector.on_info, key), 10
+            )
+
+        deadline = time.time() + 30.0
+        while not collector.has_all() and time.time() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.5)
+        node.destroy_node()
+
+        missing = [k for k, v in collector.received.items() if v is None]
+        if missing:
+            raise TimeoutError(
+                f"Did not receive CameraInfo for {missing} within 30 s"
+            )
+        print(f"[ros_multicam] CameraInfo received for {self._num_cameras} cameras")
+
+        camera_params: Dict[str, Dict] = {}
+        for i, stereo_cam in enumerate(self._stereo_cameras):
+            left_msg = collector.received[f"cam_{i}_left"]
+            right_msg = collector.received[f"cam_{i}_right"]
+            assert left_msg is not None and right_msg is not None
+            camera_params[f"camera_{i + 1}"] = {
+                "left": {
+                    "intrinsics": _make_intrinsics_like(
+                        left_msg.k[0], left_msg.k[4],
+                        left_msg.k[2], left_msg.k[5],
+                        left_msg.width, left_msg.height,
+                    ),
+                    "extrinsics": stereo_cam["left_camera"]["transform"],
+                },
+                "right": {
+                    "intrinsics": _make_intrinsics_like(
+                        right_msg.k[0], right_msg.k[4],
+                        right_msg.k[2], right_msg.k[5],
+                        right_msg.width, right_msg.height,
+                    ),
+                    "extrinsics": stereo_cam["right_camera"]["transform"],
+                },
+            }
+        return camera_params
+
+    def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
+        return vslam.Tracker.OdometryConfig(
+            async_sba=False,
+            enable_final_landmarks_export=True,
+            rectified_stereo_camera=True,
+        )
+
+    def create_rig(self, camera_params: dict) -> vslam.Rig:
+        return get_rs_multi_rig(
+            camera_params,
+            border_bottom=RESOLUTION[1] // 3,
+        )
+
+    def create_slam_config(self) -> vslam.Tracker.SlamConfig:
+        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+
+    def start_streaming(
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
+    ) -> None:
+        from functools import partial
+
+        from rclpy.node import Node
+        from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+        from sensor_msgs.msg import CompressedImage
+
+        self._running = True
+        num_slots = self._num_cameras * 2
+
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        aggregator = _FrameAggregator(num_slots, tracker, output_queue)
+        self._node = Node("ros_multicam_frames")
+        for i, (lt, rt) in enumerate(self._camera_topics):
+            lt_compressed = f"{lt}/compressed"
+            rt_compressed = f"{rt}/compressed"
+            self._node.create_subscription(
+                CompressedImage, lt_compressed,
+                partial(aggregator.on_compressed_msg, i * 2),
+                # qos_profile=qos,
+                10,
+            )
+            self._node.create_subscription(
+                CompressedImage, rt_compressed,
+                partial(aggregator.on_compressed_msg, i * 2 + 1),
+                # qos_profile=qos,
+                10,
+            )
+            print(f"[ros_multicam] Subscribed: {lt_compressed}, {rt_compressed}")
+
+        self._spin_thread = threading.Thread(
+            target=_spin_ros_node, args=(self._node, self), daemon=True
+        )
+        self._spin_thread.start()
+
+    def stop_streaming(self) -> None:
+        self._running = False
+        if hasattr(self, "_spin_thread"):
+            self._spin_thread.join(timeout=2.0)
+        if hasattr(self, "_node"):
+            self._node.destroy_node()
+
+
+BAG_SYNC_THRESHOLD_NS = 100 * 1e6  # 100 ms (network/robot sync can exceed 50 ms)
 DEFAULT_BAG_CONFIG_FILE = str(Path(__file__).parent / "frame_agx_rig.yaml")
 
 
@@ -911,7 +1177,7 @@ class MultiCamBagTracker(BaseTracker):
         return vslam.Tracker.OdometryConfig(
             async_sba=False,
             enable_final_landmarks_export=True,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -1105,6 +1371,12 @@ class MultiCamBagTracker(BaseTracker):
         return list(self._ground_truth)
 
 
+def _image_topic_to_camera_info_topic(image_topic: str) -> str:
+    """Derive CameraInfo topic from image topic. E.g. /cam/infra1/image_rect_raw -> /cam/infra1/camera_info."""
+    base = image_topic.replace("/compressed", "").rsplit("/", 1)[0]
+    return f"{base}/camera_info"
+
+
 class RGBDTracker(BaseTracker):
     """RGBD (color + depth) tracking strategy."""
 
@@ -1158,7 +1430,7 @@ class RGBDTracker(BaseTracker):
             enable_final_landmarks_export=True,
             odometry_mode=vslam.Tracker.OdometryMode.RGBD,
             rgbd_settings=rgbd_settings,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
