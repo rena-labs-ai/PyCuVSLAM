@@ -27,12 +27,13 @@ def _stamp_from_ns(timestamp_ns: int) -> Time:
 def main() -> None:
     rclpy.init()
 
-    param_node = Node("vslam_params")
+    param_node = Node("vslam")
     camera_topics_param = param_node.declare_parameter(
         "camera_topics",
         "/camera/infra1/image_rect_raw /camera/infra2/image_rect_raw",
     )
     config_file_param = param_node.declare_parameter("config_file", "")
+    enable_viz_param = param_node.declare_parameter("enable_visualization", False)
     config_file = config_file_param.value
     if not config_file:
         param_node.get_logger().error("config_file parameter is required")
@@ -49,6 +50,7 @@ def main() -> None:
         return
 
     camera_topics = [(topics[i], topics[i + 1]) for i in range(0, len(topics), 2)]
+    enable_viz = enable_viz_param.value if isinstance(enable_viz_param.value, bool) else str(enable_viz_param.value).lower() == "true"
     param_node.destroy_node()
 
     tracker = RosMulticamTracker(
@@ -60,7 +62,7 @@ def main() -> None:
         def __init__(self) -> None:
             super().__init__("vslam")
             self._odom_pub = self.create_publisher(Odometry, ODOM_TOPIC, 10)
-            self._pipeline = Pipeline(tracker)
+            self._pipeline = Pipeline(tracker, enable_visualization=enable_viz)
             self._pipeline.start()
             self.get_logger().info(f"Publishing odometry on {ODOM_TOPIC}")
             self._thread = threading.Thread(target=self._tracking_loop, daemon=True)

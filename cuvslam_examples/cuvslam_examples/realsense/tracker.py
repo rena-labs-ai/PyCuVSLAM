@@ -918,7 +918,7 @@ class RosMulticamTracker(BaseTracker):
     def create_rig(self, camera_params: dict) -> vslam.Rig:
         return get_rs_multi_rig(
             camera_params,
-            border_bottom=RESOLUTION[1] // 3,
+            border_bottom=RESOLUTION[1] // 4,
         )
 
     def create_slam_config(self) -> vslam.Tracker.SlamConfig:
@@ -950,14 +950,12 @@ class RosMulticamTracker(BaseTracker):
             self._node.create_subscription(
                 CompressedImage, lt_compressed,
                 partial(aggregator.on_compressed_msg, i * 2),
-                # qos_profile=qos,
-                10,
+                qos_profile=qos,
             )
             self._node.create_subscription(
                 CompressedImage, rt_compressed,
                 partial(aggregator.on_compressed_msg, i * 2 + 1),
-                # qos_profile=qos,
-                10,
+                qos_profile=qos,
             )
             print(f"[ros_multicam] Subscribed: {lt_compressed}, {rt_compressed}")
 

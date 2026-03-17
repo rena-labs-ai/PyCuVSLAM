@@ -27,6 +27,11 @@ def generate_launch_description():
         default_value="./",
         description="Directory for odom diff logging",
     )
+    enable_viz_arg = DeclareLaunchArgument(
+        "enable_visualization",
+        default_value="false",
+        description="Enable Rerun visualization",
+    )
 
     vslam_node = Node(
         package="pycuvslam_ros",
@@ -37,6 +42,7 @@ def generate_launch_description():
             {
                 "config_file": LaunchConfiguration("config_file"),
                 "camera_topics": LaunchConfiguration("camera_topics"),
+                "enable_visualization": LaunchConfiguration("enable_visualization"),
             }
         ],
     )
@@ -60,6 +66,7 @@ def generate_launch_description():
         camera_topics_arg,
         experiment_arg,
         log_dir_arg,
+        enable_viz_arg,
         vslam_node,
         odom_diff_logger,
     ])
