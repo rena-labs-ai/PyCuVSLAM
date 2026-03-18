@@ -1,6 +1,6 @@
 # Rena Pycuvslam ROS Node
 
-## Setup
+## Build
 
 First install micromamba:
 
@@ -35,7 +35,13 @@ pip install -r cuvslam_examples/requirements.txt
 pip install -e cuvslam_examples
 ```
 
-## Usage
+build cuvslam ros package:
+
+```bash
+colcon build --packages-select pycuvslam_ros
+```
+
+## Run
 
 1. Edit the [rig config](./src/pycuvslam_ros/config/frame_agx_rig.yaml): set `serial` and `name` per camera; comment out cameras you don't have.
 
