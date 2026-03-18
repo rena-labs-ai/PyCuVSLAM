@@ -1,5 +1,8 @@
 """Launch file for vslam with RosMulticamTracker. Assumes cameras are already running."""
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -7,15 +10,18 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    pkg_share = get_package_share_directory("pycuvslam_ros")
+    default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
+
     config_file_arg = DeclareLaunchArgument(
         "config_file",
-        default_value="cuvslam_examples/cuvslam_examples/realsense/frame_agx_rig.yaml",
+        default_value=default_config,
         description="Path to rig extrinsics YAML (stereo_cameras with left_camera.transform, right_camera.transform)",
     )
     camera_topics_arg = DeclareLaunchArgument(
         "camera_topics",
-        default_value="/front/camera/infra1/image_rect_raw /front/camera/infra2/image_rect_raw /left/camera/infra1/image_rect_raw /left/camera/infra2/image_rect_raw /right/camera/infra1/image_rect_raw /right/camera/infra2/image_rect_raw /back/camera/infra1/image_rect_raw /back/camera/infra2/image_rect_raw",
-        description="Space-separated topics: left1 right1 [left2 right2 ...]",
+        default_value="/front/camera/infra1/image_rect_raw/compressed /front/camera/infra2/image_rect_raw/compressed /left/camera/infra1/image_rect_raw/compressed /left/camera/infra2/image_rect_raw/compressed /right/camera/infra1/image_rect_raw/compressed /right/camera/infra2/image_rect_raw/compressed /back/camera/infra1/image_rect_raw/compressed /back/camera/infra2/image_rect_raw/compressed",
+        description="Space-separated compressed topics: left1 right1 [left2 right2 ...]",
     )
     experiment_arg = DeclareLaunchArgument(
         "experiment",

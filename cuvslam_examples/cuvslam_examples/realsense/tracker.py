@@ -946,19 +946,17 @@ class RosMulticamTracker(BaseTracker):
         aggregator = _FrameAggregator(num_slots, tracker, output_queue)
         self._node = Node("ros_multicam_frames")
         for i, (lt, rt) in enumerate(self._camera_topics):
-            lt_compressed = f"{lt}/compressed"
-            rt_compressed = f"{rt}/compressed"
             self._node.create_subscription(
-                CompressedImage, lt_compressed,
+                CompressedImage, lt,
                 partial(aggregator.on_compressed_msg, i * 2),
                 qos_profile=qos,
             )
             self._node.create_subscription(
-                CompressedImage, rt_compressed,
+                CompressedImage, rt,
                 partial(aggregator.on_compressed_msg, i * 2 + 1),
                 qos_profile=qos,
             )
-            print(f"[ros_multicam] Subscribed: {lt_compressed}, {rt_compressed}")
+            print(f"[ros_multicam] Subscribed: {lt}, {rt}")
 
         self._spin_thread = threading.Thread(
             target=_spin_ros_node, args=(self._node, self), daemon=True
