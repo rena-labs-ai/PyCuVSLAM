@@ -48,17 +48,22 @@ def _launch_cameras(context, *args, **kwargs):
         is_master = i == 0
         params = {
             "serial_no": serial,
-            "enable_color": "false",
-            "enable_depth": "false",
-            "enable_infra1": "true",
-            "enable_infra2": "true",
+            "enable_color": False,
+            "enable_depth": False,
+            "enable_infra1": True,
+            "enable_infra2": True,
             "depth_module.depth_profile": f"640,480,{FPS}",
             "depth_module.infra_profile": f"640,480,{FPS}",
-            "depth_module.exposure": str(IR_EXPOSURE_US),
-            "depth_module.enable_auto_exposure": "false",
-            "enable_sync": "true",
-            "depth_module.inter_cam_sync_mode": SYNC_MODE_MASTER if is_master else SYNC_MODE_SLAVE,
-            "publish_tf": "false",
+            "depth_module.exposure": IR_EXPOSURE_US,
+            "depth_module.enable_auto_exposure": False,
+            "enable_gyro": False,
+            "enable_accel": False,
+            "enable_sync": True,
+            "depth_module.inter_cam_sync_mode": (
+                SYNC_MODE_MASTER if is_master else SYNC_MODE_SLAVE
+            ),
+            "publish_tf": False,
+            # "infra_qos": "SENSOR_DATA",  # best-effort for infra1/infra2
         }
         node = Node(
             package="realsense2_camera",
