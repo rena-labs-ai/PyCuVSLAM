@@ -25,7 +25,6 @@ from cuvslam_examples.realsense.camera_utils import (
 )
 from cuvslam_examples.realsense.utils import Landmark, Pose
 
-SERIAL_NUMBER = "242422303248"
 RESOLUTION = (640, 360) # (1280, 800)
 FPS = 30
 IR_EXPOSURE_US = 10000  # Manual exposure in µs for IR stereo
@@ -40,6 +39,9 @@ MULTI_CAM_CONFIG_FILE = (
     "cuvslam_examples/realsense/frame_agx_rig.yaml"
 )
 SYNC_MATCHING_THRESHOLD_NS = 100 * 1e6
+
+ROS_INFRA1_TOPIC = "camera/infra1/image_rect_raw/compressed"
+ROS_INFRA2_TOPIC = "camera/infra2/image_rect_raw/compressed"
 
 
 
@@ -90,7 +92,7 @@ class StereoTracker(BaseTracker):
         config = rs.config()
         pipeline = rs.pipeline()
 
-        config.enable_device(SERIAL_NUMBER)
+        config.enable_device()
         config.enable_stream(
             rs.stream.infrared, 1, RESOLUTION[0], RESOLUTION[1], rs.format.y8, FPS
         )
@@ -808,22 +810,31 @@ def _spin_ros_node(node, tracker) -> None:
         rclpy.spin_once(node, timeout_sec=0.1)
 
 
+def _camera_topics_from_config(config_file: str) -> List[Tuple[str, str]]:
+    """Derive (left, right) topic pairs from rig config. Uses name for /{name}/camera/..."""
+    with open(config_file) as f:
+        data = yaml.safe_load(f)
+    topics = []
+    for c in data["stereo_cameras"]:
+        name = str(c.get("name", c["serial"])).strip("/")
+        left = f"/{name}/{ROS_INFRA1_TOPIC}"
+        right = f"/{name}/{ROS_INFRA2_TOPIC}"
+        topics.append((left, right))
+    return topics
+
+
 class RosMulticamTracker(BaseTracker):
     """Multi-camera stereo tracking from live ROS compressed topics.
 
     Each camera topic callback stores the latest decoded image in a shared
     slot. When all slots are filled, images are popped and passed to
-    tracker.track().
+    tracker.track(). Camera topics are derived from config (stereo_cameras with name).
     """
 
-    def __init__(
-        self,
-        camera_topics: List[Tuple[str, str]],
-        config_file: str,
-    ) -> None:
-        self._camera_topics = camera_topics
+    def __init__(self, config_file: str) -> None:
         self._config_file = config_file
-        self._num_cameras = len(camera_topics)
+        self._camera_topics = _camera_topics_from_config(config_file)
+        self._num_cameras = len(self._camera_topics)
         self._stereo_cameras: List[Dict] = []
         self._running = False
 

@@ -16,12 +16,7 @@ def generate_launch_description():
     config_file_arg = DeclareLaunchArgument(
         "config_file",
         default_value=default_config,
-        description="Path to rig extrinsics YAML (stereo_cameras with left_camera.transform, right_camera.transform)",
-    )
-    camera_topics_arg = DeclareLaunchArgument(
-        "camera_topics",
-        default_value="/front/camera/infra1/image_rect_raw/compressed /front/camera/infra2/image_rect_raw/compressed /left/camera/infra1/image_rect_raw/compressed /left/camera/infra2/image_rect_raw/compressed /right/camera/infra1/image_rect_raw/compressed /right/camera/infra2/image_rect_raw/compressed /back/camera/infra1/image_rect_raw/compressed /back/camera/infra2/image_rect_raw/compressed",
-        description="Space-separated compressed topics: left1 right1 [left2 right2 ...]",
+        description="Path to rig YAML (stereo_cameras with name, serial, left/right_camera.transform). Topics derived as /{name}/camera/infra1|2/image_rect_raw/compressed",
     )
     experiment_arg = DeclareLaunchArgument(
         "experiment",
@@ -47,7 +42,6 @@ def generate_launch_description():
         parameters=[
             {
                 "config_file": LaunchConfiguration("config_file"),
-                "camera_topics": LaunchConfiguration("camera_topics"),
                 "enable_visualization": LaunchConfiguration("enable_visualization"),
             }
         ],
@@ -69,7 +63,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         config_file_arg,
-        camera_topics_arg,
         experiment_arg,
         log_dir_arg,
         enable_viz_arg,

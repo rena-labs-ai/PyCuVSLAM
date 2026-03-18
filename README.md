@@ -37,27 +37,18 @@ pip install -e cuvslam_examples
 
 ## Usage
 
-The Ros Multicam Tracker node needs the camera topic being published. Hence:
+1. Edit the [rig config](./src/pycuvslam_ros/config/frame_agx_rig.yaml): set `serial` and `name` per camera; comment out cameras you don't have.
+
+2. Launch cameras:
 
 ```bash
-ros2 launch pycuvslam_ros camera.launch.py serials:="<front-camera-serial>,<left-camera-serial>,<right-camera-serial>,<back-camera-serial>"
+ros2 launch pycuvslam_ros camera.launch.py
 ```
 
-If having less cameras (e.g., only front and left), only pass the corresponding serial numbers.
-
-
-Update the camera [rig confg](./src/pycuvslam_ros/config/frame_agx_rig.yaml) (e.g., if having only front and left, comment back and right cameras).
-
-Finally run the vslam multicam tracker:
+3. Launch vslam:
 
 ```bash
 ros2 launch pycuvslam_ros vslam.launch.py
-```
-
-If having <4 cameras (e.g., only front and left):
-
-```bash
-ros2 launch pycuvslam_ros vslam.launch.py camera_topics:="/front/camera/infra1/image_rect_raw/compressed /front/camera/infra2/image_rect_raw/compressed /left/camera/infra1/image_rect_raw/compressed /left/camera/infra2/image_rect_raw/compressed"
 ```
 
 It creates a live image comparing cuvslam/odometry with fast_lio /Odometry (make sure fast_lio is running).

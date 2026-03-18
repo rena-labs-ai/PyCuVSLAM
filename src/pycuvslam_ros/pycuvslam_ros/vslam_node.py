@@ -28,10 +28,6 @@ def main() -> None:
     rclpy.init()
 
     param_node = Node("vslam")
-    camera_topics_param = param_node.declare_parameter(
-        "camera_topics",
-        "/camera/infra1/image_rect_raw /camera/infra2/image_rect_raw",
-    )
     config_file_param = param_node.declare_parameter("config_file", "")
     enable_viz_param = param_node.declare_parameter("enable_visualization", False)
     config_file = config_file_param.value
@@ -41,22 +37,10 @@ def main() -> None:
         rclpy.shutdown()
         return
 
-    topics_raw = camera_topics_param.value
-    topics = [t.strip() for t in str(topics_raw).split() if t.strip()] if isinstance(topics_raw, str) else list(topics_raw)
-    if len(topics) % 2 != 0:
-        param_node.get_logger().error("camera_topics must have even length: left1 right1 [left2 right2 ...]")
-        param_node.destroy_node()
-        rclpy.shutdown()
-        return
-
-    camera_topics = [(topics[i], topics[i + 1]) for i in range(0, len(topics), 2)]
     enable_viz = enable_viz_param.value if isinstance(enable_viz_param.value, bool) else str(enable_viz_param.value).lower() == "true"
     param_node.destroy_node()
 
-    tracker = RosMulticamTracker(
-        camera_topics=camera_topics,
-        config_file=config_file,
-    )
+    tracker = RosMulticamTracker(config_file=config_file)
 
     class VslamNode(Node):
         def __init__(self) -> None:

@@ -1,9 +1,12 @@
 """Launch RealSense cameras for MultiCameraTracker/RosMulticamTracker.
 
-Configures IR-only stereo (infra1, infra2), 640x480@30fps, manual exposure 10ms,
-first camera as sync master, others as slaves. Topics: /serial_XXX/camera/infra1|2/image_rect_raw.
+Reads rig config (stereo_cameras with serial + name), configures IR-only stereo
+(infra1, infra2), 640x480@30fps, manual exposure 10ms. Topics: /{name}/camera/infra1|2/image_rect_raw.
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
@@ -18,29 +21,31 @@ SYNC_MODE_MASTER = "1"
 SYNC_MODE_SLAVE = "2"
 
 
-def _load_serials_from_config(config_path: str) -> list[str]:
+def _load_cameras_from_config(config_path: str) -> list[tuple[str, str]]:
+    """Returns list of (serial, namespace) from stereo_cameras. Namespace = name or serial."""
     import yaml
     with open(config_path) as f:
         data = yaml.safe_load(f)
-    return [str(c["serial"]) for c in data["stereo_cameras"]]
+    result = []
+    for c in data["stereo_cameras"]:
+        serial = str(c["serial"])
+        namespace = str(c.get("name", serial)).strip("/")
+        result.append((serial, namespace))
+    return result
 
 
 def _launch_cameras(context, *args, **kwargs):
     config_file = LaunchConfiguration("config_file").perform(context)
-    serial_numbers = LaunchConfiguration("serial_numbers").perform(context)
+    if not config_file:
+        raise ValueError("config_file is required")
 
-    if config_file:
-        serials = _load_serials_from_config(config_file)
-    else:
-        serials = [s.strip() for s in serial_numbers.split(",") if s.strip()]
-
-    if not serials:
-        raise ValueError("Provide config_file or serial_numbers (space-separated)")
+    cameras = _load_cameras_from_config(config_file)
+    if not cameras:
+        raise ValueError("config_file has no stereo_cameras")
 
     nodes = []
-    for i, serial in enumerate(serials):
+    for i, (serial, namespace) in enumerate(cameras):
         is_master = i == 0
-        namespace = f"serial_{serial}"
         params = {
             "serial_no": serial,
             "enable_color": "false",
@@ -69,19 +74,16 @@ def _launch_cameras(context, *args, **kwargs):
 
 
 def generate_launch_description():
+    pkg_share = get_package_share_directory("pycuvslam_ros")
+    default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
+
     config_arg = DeclareLaunchArgument(
         "config_file",
-        default_value="",
-        description="Rig YAML (frame_agx_rig.yaml) to extract serial numbers; overrides serial_numbers",
-    )
-    serials_arg = DeclareLaunchArgument(
-        "serial_numbers",
-        default_value="242422303248,146222250568,339522301389",
-        description="Comma-separated serial numbers (used if config_file empty)",
+        default_value=default_config,
+        description="Rig YAML (stereo_cameras with serial + name). Topics: /{name}/camera/infra1|2/image_rect_raw",
     )
 
     return LaunchDescription([
         config_arg,
-        serials_arg,
         OpaqueFunction(function=_launch_cameras),
     ])
