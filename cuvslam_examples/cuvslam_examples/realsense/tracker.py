@@ -722,7 +722,7 @@ def _decode_compressed_image(raw_bytes: bytes) -> Optional[np.ndarray]:
         return None
     if len(img.shape) == 3:
         img = img[:, :, 0]
-    return img
+    return np.ascontiguousarray(img)
 
 
 class _CameraInfoCollector:
@@ -748,10 +748,12 @@ class _FrameAggregator:
         num_slots: int,
         tracker: "vslam.Tracker",
         output_queue: queue.Queue,
+        decode_fn: Optional[Callable[[bytes], Optional[np.ndarray]]] = None,
     ) -> None:
         self._num_slots = num_slots
         self._tracker = tracker
         self._output_queue = output_queue
+        self._decode_fn = decode_fn or _decode_compressed_image
         self._queues = [queue.Queue(maxsize=1) for _ in range(num_slots)]
         self.frames_fed = 0
         self._raw_images_num = [0] * num_slots
@@ -766,20 +768,20 @@ class _FrameAggregator:
         except queue.Empty:
             pass
 
-        q.put_nowait(bytes(msg.data))
+        q.put_nowait((ts, bytes(msg.data)))
         self._raw_images_num[slot] += 1
 
         if any(q.empty() for q in self._queues):
             return
 
-        raw_set = [q.get_nowait() for q in self._queues]
-
-        images = [_decode_compressed_image(raw) for raw in raw_set]
+        pairs = [q.get_nowait() for q in self._queues]
+        ts_primary = pairs[0][0]
+        images = [self._decode_fn(raw) for _, raw in pairs]
         if any(img is None for img in images):
             print("Warning: Failed to decode image, slot:", slot, flush=True)
             return
 
-        vo_pose_estimate, slam_pose = self._tracker.track(ts, images)
+        vo_pose_estimate, slam_pose = self._tracker.track(ts_primary, images)
         if vo_pose_estimate.world_from_rig is None or slam_pose is None:
             print("Warning: VSLAM track failed (world_from_rig or slam_pose is None)", flush=True)
             return
@@ -795,7 +797,7 @@ class _FrameAggregator:
 
         self._output_queue.put(
             TrackingResult(
-                ts,
+                ts_primary,
                 Pose(vo_pose_estimate.world_from_rig.pose),
                 Pose(slam_pose),
                 images,

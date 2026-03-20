@@ -19,11 +19,14 @@ from cuvslam_examples.realsense.tracker import (
     StereoTracker,
     VioTracker,
 )
+from cuvslam_examples.zed.tracker import RosZedStereoTracker, ZedStereoTracker
 from cuvslam_examples.realsense.utils import OdomLogger, Pose
 from cuvslam_examples.realsense.visualizer import RerunVisualizer
 
 TRACKERS = {
     "stereo": StereoTracker,
+    "stereo_zed": ZedStereoTracker,
+    "ros_zed_stereo": RosZedStereoTracker,
     "vio": VioTracker,
     "multicam": MultiCameraTracker,
     "multicam_bag": MultiCamBagTracker,
@@ -327,10 +330,26 @@ def main() -> None:
         default=0.2,
         help="Sync slop in seconds for ApproximateTimeSynchronizer (default: 0.2)",
     )
+    parser.add_argument(
+        "--zed-left-topic",
+        default="/zed/zed_node/left/color/rect/image/compressed",
+        help="ZED left image topic for ros_zed_stereo (default: /zed/zed_node/left/color/rect/image/compressed)",
+    )
+    parser.add_argument(
+        "--zed-right-topic",
+        default="/zed/zed_node/right/color/rect/image/compressed",
+        help="ZED right image topic for ros_zed_stereo (default: /zed/zed_node/right/color/rect/image/compressed)",
+    )
     args = parser.parse_args()
 
     tracker_cls = TRACKERS[args.tracker]
-    if args.tracker == "multicam_bag":
+    if args.tracker == "ros_zed_stereo":
+        kwargs = {
+            "left_topic": args.zed_left_topic,
+            "right_topic": args.zed_right_topic,
+        }
+        tracker = tracker_cls(**kwargs)
+    elif args.tracker == "multicam_bag":
         kwargs = {
             "serial_numbers": args.serial_numbers,
             "camera_names": args.camera_names,

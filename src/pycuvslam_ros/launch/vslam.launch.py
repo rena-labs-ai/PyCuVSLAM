@@ -33,7 +33,26 @@ def generate_launch_description():
         default_value="false",
         description="Enable Rerun visualization",
     )
-
+    tracker_arg = DeclareLaunchArgument(
+        "tracker",
+        default_value="ros_multicam",
+        description="Tracker: ros_multicam or ros_zed_stereo",
+    )
+    zed_left_arg = DeclareLaunchArgument(
+        "zed_left_topic",
+        default_value="/zed/zed_node/left/color/rect/image/compressed",
+        description="ZED left image topic (for ros_zed_stereo)",
+    )
+    zed_right_arg = DeclareLaunchArgument(
+        "zed_right_topic",
+        default_value="/zed/zed_node/right/color/rect/image/compressed",
+        description="ZED right image topic (for ros_zed_stereo)",
+    )
+    base_link_arg = DeclareLaunchArgument(
+        "base_link_frame",
+        default_value="zed_camera_link",
+        description="Child frame for odom TF (odom -> base_link_frame)",
+    )
     vslam_node = Node(
         package="pycuvslam_ros",
         executable="vslam_node",
@@ -43,6 +62,10 @@ def generate_launch_description():
             {
                 "config_file": LaunchConfiguration("config_file"),
                 "enable_visualization": LaunchConfiguration("enable_visualization"),
+                "tracker": LaunchConfiguration("tracker"),
+                "zed_left_topic": LaunchConfiguration("zed_left_topic"),
+                "zed_right_topic": LaunchConfiguration("zed_right_topic"),
+                "base_link_frame": LaunchConfiguration("base_link_frame"),
             }
         ],
     )
@@ -66,6 +89,10 @@ def generate_launch_description():
         experiment_arg,
         log_dir_arg,
         enable_viz_arg,
+        tracker_arg,
+        zed_left_arg,
+        zed_right_arg,
+        base_link_arg,
         vslam_node,
         odom_diff_logger,
     ])
