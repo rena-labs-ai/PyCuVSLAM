@@ -51,9 +51,7 @@ def _decode_zed_compressed_image(raw_bytes: bytes) -> Optional[np.ndarray]:
     """Decode ZED compressed image to RGB, contiguous (matches ZedStereoTracker format)."""
     import cv2
 
-    img = cv2.imdecode(
-        np.frombuffer(raw_bytes, dtype=np.uint8), cv2.IMREAD_UNCHANGED
-    )
+    img = cv2.imdecode(np.frombuffer(raw_bytes, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
     # BGR -> RGB, ensure contiguous (cuvslam requires stride(1)==1)
@@ -202,7 +200,9 @@ class RosZedStereoTracker(BaseTracker):
         left_info_topic = _zed_image_to_camera_info_topic(self._left_topic)
         right_info_topic = _zed_image_to_camera_info_topic(self._right_topic)
 
-        print(f"[ros_zed_stereo] Waiting for CameraInfo on {left_info_topic}, {right_info_topic} ...")
+        print(
+            f"[ros_zed_stereo] Waiting for CameraInfo on {left_info_topic}, {right_info_topic} ..."
+        )
 
         collector = _CameraInfoCollector(["left", "right"])
         node = Node("ros_zed_stereo_camera_info")
@@ -220,9 +220,7 @@ class RosZedStereoTracker(BaseTracker):
 
         missing = [k for k, v in collector.received.items() if v is None]
         if missing:
-            raise TimeoutError(
-                f"Did not receive CameraInfo for {missing} within 30 s"
-            )
+            raise TimeoutError(f"Did not receive CameraInfo for {missing} within 30 s")
         print("[ros_zed_stereo] CameraInfo received")
 
         left_msg = collector.received["left"]
@@ -242,16 +240,22 @@ class RosZedStereoTracker(BaseTracker):
         return {
             "left": {
                 "intrinsics": _make_intrinsics_like(
-                    left_msg.k[0], left_msg.k[4],
-                    left_msg.k[2], left_msg.k[5],
-                    left_msg.width, left_msg.height,
+                    left_msg.k[0],
+                    left_msg.k[4],
+                    left_msg.k[2],
+                    left_msg.k[5],
+                    left_msg.width,
+                    left_msg.height,
                 ),
             },
             "right": {
                 "intrinsics": _make_intrinsics_like(
-                    right_msg.k[0], right_msg.k[4],
-                    right_msg.k[2], right_msg.k[5],
-                    right_msg.width, right_msg.height,
+                    right_msg.k[0],
+                    right_msg.k[4],
+                    right_msg.k[2],
+                    right_msg.k[5],
+                    right_msg.width,
+                    right_msg.height,
                 ),
                 "extrinsics": right_extrinsics,
             },
@@ -262,7 +266,7 @@ class RosZedStereoTracker(BaseTracker):
             async_sba=False,
             enable_final_landmarks_export=True,
             enable_observations_export=True,
-            rectified_stereo_camera=True,
+            horizontal_stereo_camera=True,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -315,7 +319,10 @@ class RosZedStereoTracker(BaseTracker):
             while self._running:
                 time.sleep(5.0)
                 if self._running and (counts["left"] > 0 or counts["right"] > 0):
-                    print(f"[ros_zed_stereo] rx left={counts['left']} right={counts['right']}", flush=True)
+                    print(
+                        f"[ros_zed_stereo] rx left={counts['left']} right={counts['right']}",
+                        flush=True,
+                    )
 
         threading.Thread(target=_log_counts, daemon=True).start()
 
@@ -326,7 +333,10 @@ class RosZedStereoTracker(BaseTracker):
         self._node.create_subscription(
             CompressedImage, self._right_topic, on_right, qos_profile=qos
         )
-        print(f"[ros_zed_stereo] Subscribed: {self._left_topic}, {self._right_topic}", flush=True)
+        print(
+            f"[ros_zed_stereo] Subscribed: {self._left_topic}, {self._right_topic}",
+            flush=True,
+        )
 
         self._spin_thread = threading.Thread(
             target=_spin_ros_node, args=(self._node, self), daemon=True

@@ -13,6 +13,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 
@@ -39,8 +40,13 @@ class OdomDiffLogger(Node):
         self._other_trajectory: list[tuple[float, float, float]] = []
         self._jitter_points: list[tuple[float, float]] = []
 
-        self.create_subscription(Odometry, ref_topic, self._on_ref, 10)
-        self.create_subscription(Odometry, other_topic, self._on_other, 10)
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(Odometry, ref_topic, self._on_ref, qos)
+        self.create_subscription(Odometry, other_topic, self._on_other, qos)
         self.create_subscription(PointStamped, "/cuvslam/jitter", self._on_jitter, 10)
         self.get_logger().info(f"Comparing '{ref_topic}' vs '{other_topic}'")
 
