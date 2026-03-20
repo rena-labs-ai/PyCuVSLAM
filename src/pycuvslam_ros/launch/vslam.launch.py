@@ -36,7 +36,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam or ros_zed_stereo",
+        description="Tracker: ros_multicam, zed_stereo (direct ZED SDK), or ros_zed_stereo (ROS topics)",
     )
     zed_left_arg = DeclareLaunchArgument(
         "zed_left_topic",

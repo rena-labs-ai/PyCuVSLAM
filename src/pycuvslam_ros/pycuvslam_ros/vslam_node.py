@@ -1,6 +1,6 @@
 """ROS2 node that runs cuVSLAM and publishes odometry to /cuvslam/odometry.
 
-Supports RosMulticamTracker (config_file) and RosZedStereoTracker (zed_left_topic, zed_right_topic).
+Supports RosMulticamTracker (config_file), ZedStereoTracker (direct ZED SDK), and RosZedStereoTracker (zed_left_topic, zed_right_topic).
 Publishes TF: map->odom (identity), odom->base_link (from odometry).
 """
 
@@ -16,7 +16,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosMulticamTracker
-from cuvslam_examples.zed.tracker import RosZedStereoTracker
+from cuvslam_examples.zed.tracker import RosZedStereoTracker, ZedStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -58,7 +58,9 @@ def main() -> None:
     enable_viz = enable_viz_param.value if isinstance(enable_viz_param.value, bool) else str(enable_viz_param.value).lower() == "true"
     param_node.destroy_node()
 
-    if tracker_type == "ros_zed_stereo":
+    if tracker_type == "zed_stereo":
+        tracker = ZedStereoTracker()
+    elif tracker_type == "ros_zed_stereo":
         tracker = RosZedStereoTracker(
             left_topic=str(zed_left_param.value),
             right_topic=str(zed_right_param.value),

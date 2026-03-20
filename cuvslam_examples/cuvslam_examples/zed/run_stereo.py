@@ -53,7 +53,7 @@ def main():
 
     # Initialize tracker
     tracker = vslam.Tracker(rig, cfg)
-    visualizer = RerunVisualizer()
+    # visualizer = RerunVisualizer()
 
     # Create and set RuntimeParameters after opening the camera
     runtime_parameters = sl.RuntimeParameters()
@@ -116,15 +116,15 @@ def main():
                 odom_pose = odom_pose_estimate.world_from_rig.pose
                 trajectory.append(odom_pose.translation)
 
-                # Visualize results for left camera
-                visualizer.visualize_frame(
-                    frame_id=frame_id,
-                    images=[left_rgb],
-                    pose=odom_pose,
-                    observations_main_cam=[tracker.get_last_observations(0)],
-                    trajectory=trajectory,
-                    timestamp=timestamp
-                )
+                # # Visualize results for left camera
+                # visualizer.visualize_frame(
+                #     frame_id=frame_id,
+                #     images=[left_rgb],
+                #     pose=odom_pose,
+                #     observations_main_cam=[tracker.get_last_observations(0)],
+                #     trajectory=trajectory,
+                #     timestamp=timestamp
+                # )
 
     finally:
         # Clean up

@@ -149,7 +149,7 @@ class ZedStereoTracker(BaseTracker):
             if frame_id <= WARMUP_FRAMES:
                 continue
 
-            vo_pose_estimate, slam_pose = tracker.track(timestamp, images)
+            vo_pose_estimate, slam_pose = tracker.track(timestamp, images=list(images))
 
             if vo_pose_estimate.world_from_rig is None:
                 print("Warning: VO pose tracking not valid")
@@ -262,12 +262,13 @@ class RosZedStereoTracker(BaseTracker):
         }
 
     def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
-        return vslam.Tracker.OdometryConfig(
+        cfg = vslam.Tracker.OdometryConfig(
             async_sba=False,
             enable_final_landmarks_export=True,
             enable_observations_export=True,
-            horizontal_stereo_camera=True,
         )
+        cfg.horizontal_stereo_camera = not self._raw
+        return cfg
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
         h = camera_params["left"]["intrinsics"].height

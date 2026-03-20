@@ -134,7 +134,11 @@ def get_zed_rgbd_rig(
 
 def get_zed_stereo_rig(
     camera_info: sl.CameraInformation,
-    raw: bool = False
+    raw: bool = False,
+    border_left: int = 0,
+    border_right: int = 0,
+    border_top: int = 0,
+    border_bottom: int = 0,
 ) -> vslam.Rig:
     """Create a stereo Rig object from ZED camera information.
     
@@ -155,13 +159,21 @@ def get_zed_stereo_rig(
 
     # Create left camera (reference camera)
     left_camera = get_zed_camera(calibration_params.left_cam, raw=raw)
-    
+    left_camera.border_left = border_left
+    left_camera.border_right = border_right
+    left_camera.border_top = border_top
+    left_camera.border_bottom = border_bottom
+
     # Create right camera with extrinsics
     right_camera = get_zed_camera(
         calibration_params.right_cam,
         calibration_params.stereo_transform,
         raw=raw
     )
+    right_camera.border_left = border_left
+    right_camera.border_right = border_right
+    right_camera.border_top = border_top
+    right_camera.border_bottom = border_bottom
 
     print(f"Camera resolution: {left_camera.size}")
     
