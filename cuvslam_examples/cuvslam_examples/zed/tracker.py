@@ -266,7 +266,7 @@ class RosZedStereoTracker(BaseTracker):
             async_sba=False,
             enable_final_landmarks_export=True,
             enable_observations_export=True,
-            horizontal_stereo_camera=True,
+            rectified_stereo_camera=False,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:

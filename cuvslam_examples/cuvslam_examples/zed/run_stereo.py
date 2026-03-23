@@ -8,8 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 #
-import os
-import sys
 from typing import List, Optional
 
 import numpy as np
@@ -18,9 +16,7 @@ import pyzed.sl as sl
 import cuvslam as vslam
 from camera_utils import get_zed_stereo_rig, setup_zed_camera
 
-# Add path for visualizer import
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'realsense'))
-from visualizer import RerunVisualizer
+from cuvslam_examples.realsense.visualizer import RerunVisualizer
 
 # Constants
 RESOLUTION = (640, 480)
@@ -48,11 +44,9 @@ def main():
     else:
         cfg.horizontal_stereo_camera = True
 
-    # Create rig using utility function
-    rig = get_zed_stereo_rig(camera_info)
-
-    # Initialize tracker
-    tracker = vslam.Tracker(rig, cfg)
+    slam_cfg = vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+    rig = get_zed_stereo_rig(camera_info, raw=RAW)
+    tracker = vslam.Tracker(rig, cfg, slam_cfg)
     visualizer = RerunVisualizer()
 
     # Create and set RuntimeParameters after opening the camera
@@ -64,7 +58,8 @@ def main():
 
     frame_id = 0
     prev_timestamp: Optional[int] = None
-    trajectory: List[np.ndarray] = []
+    slam_trajectory: List[np.ndarray] = []
+    loop_closure_poses: List[np.ndarray] = []
 
     print("Starting stereo tracking with cuvslam...")
     print("Press Ctrl+C to stop")
@@ -106,24 +101,31 @@ def main():
                 right_rgb = np.ascontiguousarray(right_data[:,:,[2,1,0]])
 
                 frame_id += 1
-                
-                odom_pose_estimate, _ = tracker.track(timestamp, images=[left_rgb, right_rgb])
-                
-                if odom_pose_estimate.world_from_rig is None:
+
+                vo_pose_estimate, slam_pose = tracker.track(timestamp, images=[left_rgb, right_rgb])
+
+                if vo_pose_estimate.world_from_rig is None or slam_pose is None:
                     print("Warning: Pose tracking not valid")
                     continue
-                
-                odom_pose = odom_pose_estimate.world_from_rig.pose
-                trajectory.append(odom_pose.translation)
 
-                # Visualize results for left camera
+                slam_trajectory.append(slam_pose.translation)
+
+                current_lc = tracker.get_loop_closure_poses()
+                if current_lc and (
+                    not loop_closure_poses
+                    or not np.array_equal(current_lc[-1].pose.translation, loop_closure_poses[-1])
+                ):
+                    loop_closure_poses.append(current_lc[-1].pose.translation)
+
                 visualizer.visualize_frame(
                     frame_id=frame_id,
                     images=[left_rgb],
-                    pose=odom_pose,
                     observations_main_cam=[tracker.get_last_observations(0)],
-                    trajectory=trajectory,
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    slam_pose=slam_pose,
+                    slam_trajectory=slam_trajectory,
+                    final_landmarks=tracker.get_final_landmarks(),
+                    loop_closure_poses=loop_closure_poses if loop_closure_poses else None,
                 )
 
     finally:

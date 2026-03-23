@@ -5,50 +5,50 @@ stereo_cameras:
     name: 'front'
     left_camera:
       transform:
-        - [1, 0, 0, -0.0475]
+        - [1, 0, 0, -0.06] # -0.0475
         - [0, 1, 0, 0]
         - [0, 0, 1, -0.015]
     right_camera:
       transform:
-        - [1, 0, 0, 0.0475]
+        - [1, 0, 0, 0.06] # 0.0475
         - [0, 1, 0, 0]
         - [0, 0, 1, -0.015]
 
-  - serial: '146222250568' # left camera
-    name: 'left'
-    left_camera:
-      transform:
-        - [0, 0, 1, -0.074]
-        - [0, 1, 0, 0]
-        - [-1, 0, 0, 0.1065 ]
-    right_camera:
-      transform:
-        - [0, 0, 1, -0.074]
-        - [0, 1, 0, 0]
-        - [-1, 0, 0, 0.0115]
+  # - serial: '146222250568' # left camera
+  #   name: 'left'
+  #   left_camera:
+  #     transform:
+  #       - [0, 0, 1, -0.074]
+  #       - [0, 1, 0, 0]
+  #       - [-1, 0, 0, 0.1065 ]
+  #   right_camera:
+  #     transform:
+  #       - [0, 0, 1, -0.074]
+  #       - [0, 1, 0, 0]
+  #       - [-1, 0, 0, 0.0115]
 
-  - serial: '242422303248' # right camera
-    name: 'right'
-    left_camera:
-      transform:
-        - [0, 0, -1, 0.074]
-        - [0, 1, 0, 0]
-        - [1, 0, 0, 0.0115]
-    right_camera:
-      transform:
-        - [0, 0, -1, 0.074]
-        - [0, 1, 0, 0]
-        - [1, 0, 0, 0.1065]
+  # - serial: '242422303248' # right camera
+  #   name: 'right'
+  #   left_camera:
+  #     transform:
+  #       - [0, 0, -1, 0.074]
+  #       - [0, 1, 0, 0]
+  #       - [1, 0, 0, 0.0115]
+  #   right_camera:
+  #     transform:
+  #       - [0, 0, -1, 0.074]
+  #       - [0, 1, 0, 0]
+  #       - [1, 0, 0, 0.1065]
 
-  - serial: '419522072355' # back camera
-    name: 'back'
-    left_camera:
-      transform:
-        - [-1, 0, 0, 0.025]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, 0.133]
-    right_camera:
-      transform:
-        - [-1, 0, 0, -0.025]
-        - [0, 1, 0, 0]
-        - [0, 0, -1, 0.133]
+  # - serial: '419522072355' # back camera
+  #   name: 'back'
+  #   left_camera:
+  #     transform:
+  #       - [-1, 0, 0, 0.025]
+  #       - [0, 1, 0, 0]
+  #       - [0, 0, -1, 0.133]
+  #   right_camera:
+  #     transform:
+  #       - [-1, 0, 0, -0.025]
+  #       - [0, 1, 0, 0]
+  #       - [0, 0, -1, 0.133]
