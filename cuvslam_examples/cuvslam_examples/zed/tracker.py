@@ -77,7 +77,7 @@ class ZedStereoTracker(BaseTracker):
             enable_final_landmarks_export=True,
             enable_observations_export=True,
         )
-        cfg.horizontal_stereo_camera = not self._raw
+        cfg.rectified_stereo_camera = not self._raw
         return cfg
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:

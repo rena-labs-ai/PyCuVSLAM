@@ -16,7 +16,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosMulticamTracker
-from cuvslam_examples.zed.tracker import RosZedStereoTracker
+from cuvslam_examples.zed.tracker import RosZedStereoTracker, ZedStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -63,6 +63,8 @@ def main() -> None:
             left_topic=str(zed_left_param.value),
             right_topic=str(zed_right_param.value),
         )
+    elif tracker_type == "zed_stereo":
+        tracker = ZedStereoTracker()
     else:
         tracker = RosMulticamTracker(config_file=config_file)
 
