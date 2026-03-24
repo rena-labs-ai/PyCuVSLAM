@@ -15,6 +15,7 @@
   <depend>sensor_msgs</depend>
   <depend>message_filters</depend>
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>zed_wrapper</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
