@@ -1,54 +1,92 @@
-"""Launch ZED stereo camera for PyCuVSLAM.
+"""Launch ZED stereo camera for PyCuVSLAM (ZED 2 only).
 
-Wraps Stereolabs ``zed_wrapper/launch/zed_camera.launch.py`` with defaults aligned to the
-nvblox ZED example (namespace ``zed``, node ``zed_node``). Does not depend on nvblox or
-isaac_ros_launch_utils (Humble vs Jazzy).
-
-Camera model names mirror ``NvbloxCamera.zed2`` / ``NvbloxCamera.zedx`` in
-``nvblox_ros_python_utils.nvblox_launch_utils`` without importing that package.
+Loads ``pycuvslam_ros`` ``config/zed_common.yaml`` and ``config/zed2.yaml``, plus
+``zed_wrapper`` object-detection YAMLs, matching the nvblox-style parameter list.
 """
 
 from __future__ import annotations
 
 import os
-from enum import IntEnum
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import Command
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch_ros.descriptions import ComposableNode
 
-
-class ZedCameraModel(IntEnum):
-    """ZED variants for launch args (ordinal 3/4 matches nvblox ``NvbloxCamera``)."""
-
-    zed2 = 3
-    zedx = 4
-
-    @property
-    def model_id(self) -> str:
-        return self.name  # "zed2" or "zedx"
+ZED_CAMERA_NAME = "zed"
+ZED_CAMERA_MODEL = "zed2"
+CONTAINER_NAME = "zed_container"
 
 
 def generate_launch_description() -> LaunchDescription:
-    zed_share = get_package_share_directory("zed_wrapper")
-    zed_launch = os.path.join(zed_share, "launch", "zed_camera.launch.py")
+    pyc_share = get_package_share_directory("pycuvslam_ros")
+    zed_wrapper_share = get_package_share_directory("zed_wrapper")
+    zed_desc_share = get_package_share_directory("zed_description")
 
-    camera_model_arg = DeclareLaunchArgument(
-        "camera_model",
-        default_value=ZedCameraModel.zed2.model_id,
-        description="ZED model: zed2 or zedx (same strings as zed_wrapper / nvblox).",
-        choices=[ZedCameraModel.zed2.model_id, ZedCameraModel.zedx.model_id],
+    config_common = os.path.join(pyc_share, "config", "zed_common.yaml")
+    config_zed2 = os.path.join(pyc_share, "config", "zed2.yaml")
+    obj_det = os.path.join(zed_wrapper_share, "config", "object_detection.yaml")
+    custom_obj = os.path.join(zed_wrapper_share, "config", "custom_object_detection.yaml")
+
+    xacro_path = os.path.join(zed_desc_share, "urdf", "zed_descr.urdf.xacro")
+
+    rsp = Node(
+        package="robot_state_publisher",
+        namespace=ZED_CAMERA_NAME,
+        executable="robot_state_publisher",
+        name="zed_state_publisher",
+        output="screen",
+        parameters=[
+            {
+                "robot_description": Command(
+                    [
+                        "xacro",
+                        " ",
+                        xacro_path,
+                        " ",
+                        "camera_name:=",
+                        ZED_CAMERA_NAME,
+                        " ",
+                        "camera_model:=",
+                        ZED_CAMERA_MODEL,
+                    ]
+                )
+            }
+        ],
+        remappings=[("robot_description", f"{ZED_CAMERA_NAME}_description")],
     )
 
-    included = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(zed_launch),
-        launch_arguments={
-            "camera_name": "zed",
-            "camera_model": LaunchConfiguration("camera_model"),
-            "node_name": "zed_node",
-        },
+    zed_node = ComposableNode(
+        package="zed_components",
+        namespace=ZED_CAMERA_NAME,
+        name="zed_node",
+        plugin="stereolabs::ZedCamera",
+        parameters=[
+            config_common,
+            config_zed2,
+            obj_det,
+            custom_obj,
+            {
+                "general.camera_name": ZED_CAMERA_NAME,
+                "general.camera_model": ZED_CAMERA_MODEL,
+            },
+        ],
     )
 
-    return LaunchDescription([camera_model_arg, included])
+    zed_container = ComposableNodeContainer(
+        name=CONTAINER_NAME,
+        namespace=ZED_CAMERA_NAME,
+        package="rclcpp_components",
+        executable="component_container_isolated",
+        arguments=["--use_multi_threaded_executor", "--ros-args", "--log-level", "info"],
+        output="screen",
+        composable_node_descriptions=[],
+    )
+
+    load_zed = LoadComposableNodes(
+        target_container=f"/{ZED_CAMERA_NAME}/{CONTAINER_NAME}",
+        composable_node_descriptions=[zed_node],
+    )
+
+    return LaunchDescription([rsp, zed_container, load_zed])

@@ -14,7 +14,10 @@ setup(
             "share/" + package_name + "/launch",
             ["launch/vslam.launch.py", "launch/camera.launch.py", "launch/zed_camera.launch.py"],
         ),
-        ("share/" + package_name + "/config", ["config/frame_agx_rig.yaml"]),
+        (
+            "share/" + package_name + "/config",
+            ["config/frame_agx_rig.yaml", "config/zed_common.yaml", "config/zed2.yaml"],
+        ),
     ],
     zip_safe=True,
     maintainer="User",
