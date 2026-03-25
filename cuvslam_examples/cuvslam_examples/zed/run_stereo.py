@@ -40,9 +40,9 @@ def main():
     )
 
     if RAW:
-        cfg.horizontal_stereo_camera = False
+        cfg.rectified_stereo_camera = False
     else:
-        cfg.horizontal_stereo_camera = True
+        cfg.rectified_stereo_camera = True
 
     slam_cfg = vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
     rig = get_zed_stereo_rig(camera_info, raw=RAW)
@@ -117,16 +117,16 @@ def main():
                 ):
                     loop_closure_poses.append(current_lc[-1].pose.translation)
 
-                visualizer.visualize_frame(
-                    frame_id=frame_id,
-                    images=[left_rgb],
-                    observations_main_cam=[tracker.get_last_observations(0)],
-                    timestamp=timestamp,
-                    slam_pose=slam_pose,
-                    slam_trajectory=slam_trajectory,
-                    final_landmarks=tracker.get_final_landmarks(),
-                    loop_closure_poses=loop_closure_poses if loop_closure_poses else None,
-                )
+                # visualizer.visualize_frame(
+                #     frame_id=frame_id,
+                #     images=[left_rgb],
+                #     observations_main_cam=[tracker.get_last_observations(0)],
+                #     timestamp=timestamp,
+                #     slam_pose=slam_pose,
+                #     slam_trajectory=slam_trajectory,
+                #     final_landmarks=tracker.get_final_landmarks(),
+                #     loop_closure_poses=loop_closure_poses if loop_closure_poses else None,
+                # )
 
     finally:
         # Clean up

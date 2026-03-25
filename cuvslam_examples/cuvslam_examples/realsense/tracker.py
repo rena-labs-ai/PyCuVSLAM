@@ -92,7 +92,7 @@ class StereoTracker(BaseTracker):
         config = rs.config()
         pipeline = rs.pipeline()
 
-        config.enable_device()
+
         config.enable_stream(
             rs.stream.infrared, 1, RESOLUTION[0], RESOLUTION[1], rs.format.y8, FPS
         )
