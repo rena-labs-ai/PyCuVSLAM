@@ -30,6 +30,7 @@ FPS = 30
 IR_EXPOSURE_US = 10000  # Manual exposure in µs for IR stereo
 WARMUP_FRAMES = 500
 IMAGE_JITTER_THRESHOLD_NS = ((1000 / FPS) + 2) * 1e6
+RS_WAIT_FOR_FRAMES_MS = 5000
 IMU_FREQUENCY_ACCEL = 100
 IMU_FREQUENCY_GYRO = 200
 IMU_JITTER_THRESHOLD_NS = 12 * 1e6
@@ -177,7 +178,7 @@ class StereoTracker(BaseTracker):
         dropped_count = 0
 
         while self._running:
-            frames = self._pipeline.wait_for_frames()
+            frames = self._pipeline.wait_for_frames(RS_WAIT_FOR_FRAMES_MS)
             left_frame = frames.get_infrared_frame(1)
             right_frame = frames.get_infrared_frame(2)
 
@@ -222,15 +223,6 @@ class StereoTracker(BaseTracker):
             landmarks = [
                 Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
             ]
-            print(
-                "slam_pose x:",
-                slam_pose.translation[0],
-                "y:",
-                slam_pose.translation[1],
-                "z:",
-                slam_pose.translation[2],
-                flush=True,
-            )
 
             output_queue.put(
                 TrackingResult(
