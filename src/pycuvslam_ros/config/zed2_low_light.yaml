@@ -1,0 +1,41 @@
+---
+/**:
+    ros__parameters:
+        general:
+            grab_frame_rate: 60
+            pub_frame_rate: 60.0
+        video:
+            # Step 8 — brightness / contrast / gamma (defaults in zed_common are 4 / 4 / 8)
+            brightness: 5
+            contrast: 4
+            gamma: 8
+            # Prerequisite — sharp images for feature stability
+            sharpness: 7
+            auto_exposure_gain: false
+            exposure: 50
+            gain: 0
+            auto_whitebalance: true
+            # whitebalance_temperature: 29
+            # Step 5 / 8 — SDK ISP denoising [0–100]; parallel to Odometry.Config.use_denoising in cuVSLAM
+            denoising: 50
+
+# ---
+# /**:
+#     ros__parameters:
+#         general:
+#             grab_frame_rate: 60
+#             pub_frame_rate: 60.0
+#         video:
+#             # Step 8 — brightness / contrast / gamma (defaults in zed_common are 4 / 4 / 8)
+#             brightness: 5
+#             contrast: 4
+#             gamma: 8
+#             # Prerequisite — sharp images for feature stability
+#             sharpness: 5
+#             auto_exposure_gain: false
+#             exposure: 50
+#             gain: 100
+#             auto_whitebalance: true
+#             # whitebalance_temperature: 29
+#             # Step 5 / 8 — SDK ISP denoising [0–100]; parallel to Odometry.Config.use_denoising in cuVSLAM
+#             denoising: 50

@@ -1,6 +1,7 @@
 """Launch ZED stereo camera for PyCuVSLAM (ZED 2 only).
 
-Loads ``pycuvslam_ros`` ``config/zed_common.yaml`` and ``config/zed2.yaml``, plus
+Loads ``pycuvslam_ros`` ``config/zed_common.yaml`` and a model YAML under ``config/``
+(see ``camera_config`` argument, e.g. ``zed2.yaml`` or ``zed2_low_light.yaml``), plus
 ``zed_wrapper`` object-detection YAMLs, matching the nvblox-style parameter list.
 """
 
@@ -10,8 +11,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.substitutions import Command
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch_ros.substitutions import FindPackageShare
 from launch_ros.descriptions import ComposableNode
 
 ZED_CAMERA_NAME = "zed"
@@ -24,8 +27,15 @@ def generate_launch_description() -> LaunchDescription:
     zed_wrapper_share = get_package_share_directory("zed_wrapper")
     zed_desc_share = get_package_share_directory("zed_description")
 
+    camera_config_arg = DeclareLaunchArgument(
+        "camera_config",
+        default_value="zed2.yaml",
+        description="Filename under pycuvslam_ros/config (e.g. zed2.yaml, zed2_low_light.yaml).",
+    )
     config_common = os.path.join(pyc_share, "config", "zed_common.yaml")
-    config_zed2 = os.path.join(pyc_share, "config", "zed2.yaml")
+    config_camera = PathJoinSubstitution(
+        [FindPackageShare("pycuvslam_ros"), "config", LaunchConfiguration("camera_config")]
+    )
     obj_det = os.path.join(zed_wrapper_share, "config", "object_detection.yaml")
     custom_obj = os.path.join(zed_wrapper_share, "config", "custom_object_detection.yaml")
 
@@ -64,7 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         plugin="stereolabs::ZedCamera",
         parameters=[
             config_common,
-            config_zed2,
+            config_camera,
             obj_det,
             custom_obj,
             {
@@ -89,4 +99,4 @@ def generate_launch_description() -> LaunchDescription:
         composable_node_descriptions=[zed_node],
     )
 
-    return LaunchDescription([rsp, zed_container, load_zed])
+    return LaunchDescription([camera_config_arg, rsp, zed_container, load_zed])

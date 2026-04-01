@@ -16,7 +16,12 @@ setup(
         ),
         (
             "share/" + package_name + "/config",
-            ["config/frame_agx_rig.yaml", "config/zed_common.yaml", "config/zed2.yaml"],
+            [
+                "config/frame_agx_rig.yaml",
+                "config/zed_common.yaml",
+                "config/zed2.yaml",
+                "config/zed2_low_light.yaml",
+            ],
         ),
     ],
     zip_safe=True,
