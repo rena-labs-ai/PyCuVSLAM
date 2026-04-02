@@ -36,7 +36,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam or ros_zed_stereo",
+        description="Tracker: ros_multicam, ros_zed_stereo, or ros_zed_vio",
     )
     zed_left_arg = DeclareLaunchArgument(
         "zed_left_topic",
@@ -47,6 +47,11 @@ def generate_launch_description():
         "zed_right_topic",
         default_value="/zed/zed_node/right/color/rect/image/compressed",
         description="ZED right image topic (for ros_zed_stereo)",
+    )
+    zed_imu_arg = DeclareLaunchArgument(
+        "zed_imu_topic",
+        default_value="/zed/zed_node/imu/data",
+        description="ZED IMU topic (for ros_zed_vio)",
     )
     base_link_arg = DeclareLaunchArgument(
         "base_link_frame",
@@ -65,6 +70,7 @@ def generate_launch_description():
                 "tracker": LaunchConfiguration("tracker"),
                 "zed_left_topic": LaunchConfiguration("zed_left_topic"),
                 "zed_right_topic": LaunchConfiguration("zed_right_topic"),
+                "zed_imu_topic": LaunchConfiguration("zed_imu_topic"),
                 "base_link_frame": LaunchConfiguration("base_link_frame"),
             }
         ],
@@ -92,6 +98,7 @@ def generate_launch_description():
         tracker_arg,
         zed_left_arg,
         zed_right_arg,
+        zed_imu_arg,
         base_link_arg,
         vslam_node,
         odom_diff_logger,

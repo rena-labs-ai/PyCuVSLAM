@@ -11,8 +11,8 @@
             gamma: 8
             # Prerequisite — sharp images for feature stability
             sharpness: 7
-            auto_exposure_gain: false
-            exposure: 50
+            auto_exposure_gain: true
+            exposure: 20
             gain: 0
             auto_whitebalance: true
             # whitebalance_temperature: 29

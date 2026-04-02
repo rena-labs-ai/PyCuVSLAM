@@ -1,16 +1,16 @@
 #     Jetson AGX Frame Rig
 
 stereo_cameras:
-  - serial: '339522301389' # front camera
+  - serial: '242422303248' # front camera
     name: 'front'
     left_camera:
       transform:
-        - [1, 0, 0, -0.06] # -0.0475
+        - [1, 0, 0, -0.0475] #  -0.025
         - [0, 1, 0, 0]
         - [0, 0, 1, -0.015]
     right_camera:
       transform:
-        - [1, 0, 0, 0.06] # 0.0475
+        - [1, 0, 0, 0.0475] # 0.025
         - [0, 1, 0, 0]
         - [0, 0, 1, -0.015]
 

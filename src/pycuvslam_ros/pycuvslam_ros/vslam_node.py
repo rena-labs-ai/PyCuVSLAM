@@ -16,7 +16,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosMulticamTracker, StereoTracker
-from cuvslam_examples.zed.tracker import RosZedStereoTracker, ZedStereoTracker
+from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker, ZedStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -43,6 +43,9 @@ def main() -> None:
     zed_right_param = param_node.declare_parameter(
         "zed_right_topic", "/zed/zed_node/right/color/rect/image/compressed"
     )
+    zed_imu_param = param_node.declare_parameter(
+        "zed_imu_topic", "/zed/zed_node/imu/data"
+    )
     base_link_param = param_node.declare_parameter(
         "base_link_frame", "zed_camera_link"
     )
@@ -62,6 +65,12 @@ def main() -> None:
         tracker = RosZedStereoTracker(
             left_topic=str(zed_left_param.value),
             right_topic=str(zed_right_param.value),
+        )
+    elif tracker_type == "ros_zed_vio":
+        tracker = RosZedVIOTracker(
+            left_topic=str(zed_left_param.value),
+            right_topic=str(zed_right_param.value),
+            imu_topic=str(zed_imu_param.value),
         )
     elif tracker_type == "zed_stereo":
         tracker = ZedStereoTracker()
