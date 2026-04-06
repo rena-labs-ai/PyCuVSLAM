@@ -54,8 +54,8 @@ def _launch_cameras(context, *args, **kwargs):
             "enable_infra2": True,
             "depth_module.depth_profile": f"640,480,{FPS}",
             "depth_module.infra_profile": f"640,480,{FPS}",
-            # "depth_module.exposure": IR_EXPOSURE_US,
             "depth_module.enable_auto_exposure": True,
+            "depth_module.emitter_enabled": 0,
             "enable_gyro": False,
             "enable_accel": False,
             "enable_sync": True,
@@ -63,6 +63,7 @@ def _launch_cameras(context, *args, **kwargs):
                 SYNC_MODE_MASTER if is_master else SYNC_MODE_SLAVE
             ),
             "publish_tf": False,
+            # "depth_module.exposure": IR_EXPOSURE_US,
             # "infra_qos": "SENSOR_DATA",  # best-effort for infra1/infra2
         }
         node = Node(
