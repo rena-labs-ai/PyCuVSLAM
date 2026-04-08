@@ -1,6 +1,7 @@
 """ROS2 node that runs cuVSLAM and publishes odometry to /cuvslam/odometry.
 
-Supports RosMulticamTracker, RosZedStereoTracker, and RosHawkStereoTracker.
+Supports RosMulticamTracker, RosZedStereoTracker, RosHawkStereoTracker,
+and RosHawkMulticamTracker.
 Publishes TF: map->odom (identity), odom->base_link (from odometry).
 """
 
@@ -17,7 +18,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosMulticamTracker, StereoTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker, ZedStereoTracker
-from cuvslam_examples.hawk.tracker import RosHawkStereoTracker
+from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -53,14 +54,24 @@ def main() -> None:
     hawk_right_param = param_node.declare_parameter(
         "hawk_right_topic", "/hawk/right/image_raw/compressed"
     )
+    hawk_rig_param = param_node.declare_parameter(
+        "hawk_rig_file", ""
+    )
     base_link_param = param_node.declare_parameter(
         "base_link_frame", "zed_camera_link"
     )
 
     config_file = config_file_param.value
     tracker_type = str(tracker_param.value)
+    hawk_rig_file = str(hawk_rig_param.value)
+
     if tracker_type == "ros_multicam" and not config_file:
         param_node.get_logger().error("config_file parameter is required for ros_multicam")
+        param_node.destroy_node()
+        rclpy.shutdown()
+        return
+    if tracker_type == "ros_hawk_multicam" and not hawk_rig_file:
+        param_node.get_logger().error("hawk_rig_file parameter is required for ros_hawk_multicam")
         param_node.destroy_node()
         rclpy.shutdown()
         return
@@ -73,6 +84,8 @@ def main() -> None:
             left_topic=str(hawk_left_param.value),
             right_topic=str(hawk_right_param.value),
         )
+    elif tracker_type == "ros_hawk_multicam":
+        tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
     elif tracker_type == "ros_zed_stereo":
         tracker = RosZedStereoTracker(
             left_topic=str(zed_left_param.value),

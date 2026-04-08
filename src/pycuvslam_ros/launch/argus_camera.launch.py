@@ -85,6 +85,11 @@ def generate_launch_description():
             default_value='1200',
             description='Rectified output height (px).',
         ),
+        DeclareLaunchArgument(
+            'camera_namespace',
+            default_value='front',
+            description='Top-level namespace for all camera topics (e.g. front, rear).',
+        ),
     ]
 
     module_id = LaunchConfiguration('module_id')
@@ -100,12 +105,13 @@ def generate_launch_description():
     wide_fov = LaunchConfiguration('wide_fov')
     output_width = LaunchConfiguration('output_width')
     output_height = LaunchConfiguration('output_height')
+    camera_namespace = LaunchConfiguration('camera_namespace')
 
     argus_stereo_node = ComposableNode(
         name='argus_stereo',
+        namespace=camera_namespace,
         package='isaac_ros_argus_camera',
         plugin='nvidia::isaac_ros::argus::ArgusStereoNode',
-        namespace='',
         parameters=[{
             'module_id': module_id,
             'camera_id': camera_id,
@@ -123,6 +129,7 @@ def generate_launch_description():
 
     left_rectify_node = ComposableNode(
         name='left_rectify_node',
+        namespace=camera_namespace,
         package='isaac_ros_image_proc',
         plugin='nvidia::isaac_ros::image_proc::RectifyNode',
         parameters=[{
@@ -139,6 +146,7 @@ def generate_launch_description():
 
     right_rectify_node = ComposableNode(
         name='right_rectify_node',
+        namespace=camera_namespace,
         package='isaac_ros_image_proc',
         plugin='nvidia::isaac_ros::image_proc::RectifyNode',
         parameters=[{
@@ -155,7 +163,7 @@ def generate_launch_description():
 
     container = ComposableNodeContainer(
         name='argus_camera_container',
-        namespace='',
+        namespace=camera_namespace,
         package='rclcpp_components',
         executable='component_container_mt',
         composable_node_descriptions=[
@@ -171,6 +179,7 @@ def generate_launch_description():
         package='pycuvslam_ros',
         executable='camera_info_relay',
         name='left_camera_info_relay',
+        namespace=camera_namespace,
         remappings=[
             ('image_raw', 'left/image_raw'),
             ('camera_info', 'left/camera_info'),
@@ -183,6 +192,7 @@ def generate_launch_description():
         package='pycuvslam_ros',
         executable='camera_info_relay',
         name='right_camera_info_relay',
+        namespace=camera_namespace,
         remappings=[
             ('image_raw', 'right/image_raw'),
             ('camera_info', 'right/camera_info'),

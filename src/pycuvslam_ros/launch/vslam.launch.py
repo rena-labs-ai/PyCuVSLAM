@@ -1,4 +1,4 @@
-"""Launch file for vslam with RosMulticamTracker. Assumes cameras are already running."""
+"""Launch file for vslam. Assumes cameras are already running."""
 
 import os
 
@@ -12,6 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_share = get_package_share_directory("pycuvslam_ros")
     default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
+    default_hawk_rig = os.path.join(pkg_share, "config", "hawk_rig.yaml")
 
     config_file_arg = DeclareLaunchArgument(
         "config_file",
@@ -36,7 +37,12 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, or ros_hawk_stereo",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, or ros_hawk_multicam",
+    )
+    hawk_rig_arg = DeclareLaunchArgument(
+        "hawk_rig_file",
+        default_value=default_hawk_rig,
+        description="Path to hawk rig YAML (for ros_hawk_multicam). Topics and extrinsics per stereo pair.",
     )
     zed_left_arg = DeclareLaunchArgument(
         "zed_left_topic",
@@ -83,6 +89,7 @@ def generate_launch_description():
                 "zed_imu_topic": LaunchConfiguration("zed_imu_topic"),
                 "hawk_left_topic": LaunchConfiguration("hawk_left_topic"),
                 "hawk_right_topic": LaunchConfiguration("hawk_right_topic"),
+                "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
                 "base_link_frame": LaunchConfiguration("base_link_frame"),
             }
         ],
@@ -113,6 +120,7 @@ def generate_launch_description():
         zed_imu_arg,
         hawk_left_arg,
         hawk_right_arg,
+        hawk_rig_arg,
         base_link_arg,
         vslam_node,
         odom_diff_logger,

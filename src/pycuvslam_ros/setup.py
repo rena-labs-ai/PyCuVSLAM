@@ -16,7 +16,6 @@ setup(
                 "launch/vslam.launch.py",
                 "launch/camera.launch.py",
                 "launch/zed_camera.launch.py",
-                "launch/hawk_camera.launch.py",
                 "launch/argus_camera.launch.py",
             ],
         ),
@@ -24,6 +23,7 @@ setup(
             "share/" + package_name + "/config",
             [
                 "config/frame_agx_rig.yaml",
+                "config/hawk_rig.yaml",
                 "config/zed_common.yaml",
                 "config/zed2.yaml",
                 "config/zed2_low_light.yaml",

@@ -87,7 +87,7 @@ class OdomDiffLogger(Node):
             return
         n = min(len(self._ref_trajectory), len(self._other_trajectory)) if self._ref_trajectory else 0
         ref = self._ref_trajectory[:n] if n else []
-        other = self._other_trajectory[:n] if n else list(self._other_trajectory)
+        other = self._other_trajectory[-n:] if n else list(self._other_trajectory)
         try:
             metrics = _compute_metrics(ref, other) if ref else None
             plot(ref, other, self._experiment, self._out_path(), metrics=metrics,
@@ -98,7 +98,7 @@ class OdomDiffLogger(Node):
     def get_results(self) -> tuple[list, list, list, str, Path]:
         n = min(len(self._ref_trajectory), len(self._other_trajectory)) if self._ref_trajectory else 0
         ref = self._ref_trajectory[:n] if n else []
-        other = self._other_trajectory[:n] if n else list(self._other_trajectory)
+        other = self._other_trajectory[-n:] if n else list(self._other_trajectory)
         return ref, other, list(self._jitter_points), self._experiment, self._log_dir
 
 
