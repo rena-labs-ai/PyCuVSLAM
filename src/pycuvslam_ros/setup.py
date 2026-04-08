@@ -12,7 +12,13 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (
             "share/" + package_name + "/launch",
-            ["launch/vslam.launch.py", "launch/camera.launch.py", "launch/zed_camera.launch.py"],
+            [
+                "launch/vslam.launch.py",
+                "launch/camera.launch.py",
+                "launch/zed_camera.launch.py",
+                "launch/hawk_camera.launch.py",
+                "launch/argus_camera.launch.py",
+            ],
         ),
         (
             "share/" + package_name + "/config",
@@ -34,6 +40,8 @@ setup(
             "vslam_node = pycuvslam_ros.vslam_node:main",
             "odom_diff_logger = pycuvslam_ros.odom_logger:main",
             "camera_hz_logger = pycuvslam_ros.camera_hz_logger:main",
+            "hawk_camera_node = pycuvslam_ros.hawk_camera_node:main",
+            "camera_info_relay = pycuvslam_ros.camera_info_relay_node:main",
         ],
     },
 )

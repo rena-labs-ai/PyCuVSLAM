@@ -36,7 +36,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, or ros_zed_vio",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, or ros_hawk_stereo",
     )
     zed_left_arg = DeclareLaunchArgument(
         "zed_left_topic",
@@ -52,6 +52,16 @@ def generate_launch_description():
         "zed_imu_topic",
         default_value="/zed/zed_node/imu/data",
         description="ZED IMU topic (for ros_zed_vio)",
+    )
+    hawk_left_arg = DeclareLaunchArgument(
+        "hawk_left_topic",
+        default_value="/left/image_rect",
+        description="HAWK left image topic (for ros_hawk_stereo)",
+    )
+    hawk_right_arg = DeclareLaunchArgument(
+        "hawk_right_topic",
+        default_value="/right/image_rect",
+        description="HAWK right image topic (for ros_hawk_stereo)",
     )
     base_link_arg = DeclareLaunchArgument(
         "base_link_frame",
@@ -71,6 +81,8 @@ def generate_launch_description():
                 "zed_left_topic": LaunchConfiguration("zed_left_topic"),
                 "zed_right_topic": LaunchConfiguration("zed_right_topic"),
                 "zed_imu_topic": LaunchConfiguration("zed_imu_topic"),
+                "hawk_left_topic": LaunchConfiguration("hawk_left_topic"),
+                "hawk_right_topic": LaunchConfiguration("hawk_right_topic"),
                 "base_link_frame": LaunchConfiguration("base_link_frame"),
             }
         ],
@@ -99,6 +111,8 @@ def generate_launch_description():
         zed_left_arg,
         zed_right_arg,
         zed_imu_arg,
+        hawk_left_arg,
+        hawk_right_arg,
         base_link_arg,
         vslam_node,
         odom_diff_logger,

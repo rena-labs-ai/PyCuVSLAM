@@ -1,6 +1,6 @@
 """ROS2 node that runs cuVSLAM and publishes odometry to /cuvslam/odometry.
 
-Supports RosMulticamTracker (config_file) and RosZedStereoTracker (zed_left_topic, zed_right_topic).
+Supports RosMulticamTracker, RosZedStereoTracker, and RosHawkStereoTracker.
 Publishes TF: map->odom (identity), odom->base_link (from odometry).
 """
 
@@ -17,6 +17,7 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosMulticamTracker, StereoTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker, ZedStereoTracker
+from cuvslam_examples.hawk.tracker import RosHawkStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -46,6 +47,12 @@ def main() -> None:
     zed_imu_param = param_node.declare_parameter(
         "zed_imu_topic", "/zed/zed_node/imu/data"
     )
+    hawk_left_param = param_node.declare_parameter(
+        "hawk_left_topic", "/hawk/left/image_raw/compressed"
+    )
+    hawk_right_param = param_node.declare_parameter(
+        "hawk_right_topic", "/hawk/right/image_raw/compressed"
+    )
     base_link_param = param_node.declare_parameter(
         "base_link_frame", "zed_camera_link"
     )
@@ -61,7 +68,12 @@ def main() -> None:
     enable_viz = enable_viz_param.value if isinstance(enable_viz_param.value, bool) else str(enable_viz_param.value).lower() == "true"
     param_node.destroy_node()
 
-    if tracker_type == "ros_zed_stereo":
+    if tracker_type == "ros_hawk_stereo":
+        tracker = RosHawkStereoTracker(
+            left_topic=str(hawk_left_param.value),
+            right_topic=str(hawk_right_param.value),
+        )
+    elif tracker_type == "ros_zed_stereo":
         tracker = RosZedStereoTracker(
             left_topic=str(zed_left_param.value),
             right_topic=str(zed_right_param.value),
