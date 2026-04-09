@@ -775,10 +775,8 @@ class _FrameAggregator:
             print("Warning: Failed to decode image, slot:", slot, flush=True)
             return
 
-        t0 = time.monotonic()
         vo_pose_estimate, slam_pose = self._tracker.track(ts_primary, images)
-        track_ms = (time.monotonic() - t0) * 1000
-        print(f"[ros_multicam] decode={decode_ms:.1f} ms  track={track_ms:.1f} ms", flush=True)
+
         if vo_pose_estimate.world_from_rig is None or slam_pose is None:
             print("Warning: VSLAM track failed (world_from_rig or slam_pose is None)", flush=True)
             return

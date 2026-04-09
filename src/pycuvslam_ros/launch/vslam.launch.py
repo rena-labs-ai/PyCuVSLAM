@@ -46,12 +46,12 @@ def generate_launch_description():
     )
     zed_left_arg = DeclareLaunchArgument(
         "zed_left_topic",
-        default_value="/zed/zed_node/left/color/rect/image/compressed",
+        default_value="/zed_base/zed_node/left/color/rect/image/compressed",
         description="ZED left image topic (for ros_zed_stereo)",
     )
     zed_right_arg = DeclareLaunchArgument(
         "zed_right_topic",
-        default_value="/zed/zed_node/right/color/rect/image/compressed",
+        default_value="/zed_base/zed_node/right/color/rect/image/compressed",
         description="ZED right image topic (for ros_zed_stereo)",
     )
     zed_imu_arg = DeclareLaunchArgument(

@@ -24,7 +24,6 @@ from cuvslam_examples.realsense.camera_utils import get_rs_imu, get_rs_stereo_ri
 from cuvslam_examples.realsense.tracker import (
     BaseTracker,
     _CameraInfoCollector,
-    _FrameAggregator,
     _make_intrinsics_like,
     _spin_ros_node,
 )
@@ -32,14 +31,15 @@ from cuvslam_examples.realsense.utils import Landmark, Pose
 
 from cuvslam_examples.zed.camera_utils import get_zed_stereo_rig, setup_zed_camera
 
+SLOP_SEC = 0.001  # 5 ms
 RESOLUTION = (640, 480)
 FPS = 60
 WARMUP_FRAMES = 10
 IMAGE_JITTER_THRESHOLD_NS = ((1000 / FPS) + 2) * 1e6
 
 # ZED ROS2: camera_info is at {image_topic}/camera_info (e.g. .../color/rect/image/camera_info)
-DEFAULT_ZED_LEFT_TOPIC = "/zed/zed_node/left/color/rect/image/compressed"
-DEFAULT_ZED_RIGHT_TOPIC = "/zed/zed_node/right/color/rect/image/compressed"
+DEFAULT_ZED_LEFT_TOPIC = "/zed_base/zed_node/left/color/rect/image/compressed"
+DEFAULT_ZED_RIGHT_TOPIC = "/zed_base/zed_node/right/color/rect/image/compressed"
 
 
 def _zed_image_to_camera_info_topic(image_topic: str) -> str:
@@ -267,15 +267,15 @@ class RosZedStereoTracker(BaseTracker):
             async_sba=False,
             enable_final_landmarks_export=True,
             enable_observations_export=True,
-            rectified_stereo_camera=False,
-            use_denoising=True,
+            rectified_stereo_camera=True,
+            use_denoising=False,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
         h = camera_params["left"]["intrinsics"].height
         return get_rs_stereo_rig(
             camera_params,
-            border_bottom=h // 4,
+            # border_bottom=h // 4,
         )
 
     def create_slam_config(self) -> vslam.Tracker.SlamConfig:
@@ -284,8 +284,8 @@ class RosZedStereoTracker(BaseTracker):
     def start_streaming(
         self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
+        import message_filters
         from sensor_msgs.msg import CompressedImage
-
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -294,49 +294,80 @@ class RosZedStereoTracker(BaseTracker):
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=10,
         )
 
-        aggregator = _FrameAggregator(
-            2, tracker, output_queue, decode_fn=_decode_zed_compressed_image
-        )
-        first_received = {"left": True, "right": True}
-        counts = {"left": 0, "right": 0}
+        frames_fed = [0]
+        raw_counts = [0, 0]
 
-        def on_left(msg):
-            counts["left"] += 1
-            if first_received["left"]:
-                print("[ros_zed_stereo] First left frame received", flush=True)
-                first_received["left"] = False
-            aggregator.on_compressed_msg(0, msg)
-
-        def on_right(msg):
-            counts["right"] += 1
-            if first_received["right"]:
-                print("[ros_zed_stereo] First right frame received", flush=True)
-                first_received["right"] = False
-            aggregator.on_compressed_msg(1, msg)
-
-        def _log_counts():
+        def _log_stats():
             while self._running:
-                time.sleep(5.0)
-                if self._running and (counts["left"] > 0 or counts["right"] > 0):
-                    print(
-                        f"[ros_zed_stereo] rx left={counts['left']} right={counts['right']}",
-                        flush=True,
-                    )
+                time.sleep(1.0)
+                print(
+                    f"[ros_zed_stereo] raw_cam_0={raw_counts[0]}/s raw_cam_1={raw_counts[1]}/s "
+                    f"fed={frames_fed[0]}/s",
+                    flush=True,
+                )
+                frames_fed[0] = 0
+                raw_counts[0] = 0
+                raw_counts[1] = 0
 
-        threading.Thread(target=_log_counts, daemon=True).start()
+        threading.Thread(target=_log_stats, daemon=True).start()
+
+        def on_stereo_pair(left_msg, right_msg):
+            ts = left_msg.header.stamp.sec * 1_000_000_000 + left_msg.header.stamp.nanosec
+
+            t_decode = time.monotonic()
+            images = [
+                _decode_zed_compressed_image(left_msg.data),
+                _decode_zed_compressed_image(right_msg.data),
+            ]
+            decode_ms = (time.monotonic() - t_decode) * 1000
+
+            if any(img is None for img in images):
+                print("[ros_zed_stereo] Warning: decode failed", flush=True)
+                return
+
+            t0 = time.monotonic()
+            vo_pose_estimate, slam_pose = tracker.track(ts, images)
+            track_ms = (time.monotonic() - t0) * 1000
+
+            if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+                print("[ros_zed_stereo] Warning: track failed", flush=True)
+                return
+
+            frames_fed[0] += 1
+
+            landmarks = [
+                Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
+            ]
+            output_queue.put(
+                TrackingResult(
+                    ts,
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    images,
+                    landmarks,
+                )
+            )
 
         self._node = Node("ros_zed_stereo_frames")
-        self._node.create_subscription(
-            CompressedImage, self._left_topic, on_left, qos_profile=qos
+        left_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._left_topic, qos_profile=qos
         )
-        self._node.create_subscription(
-            CompressedImage, self._right_topic, on_right, qos_profile=qos
+        right_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._right_topic, qos_profile=qos
         )
+        left_sub.registerCallback(lambda _: raw_counts.__setitem__(0, raw_counts[0] + 1))
+        right_sub.registerCallback(lambda _: raw_counts.__setitem__(1, raw_counts[1] + 1))
+        self._sync = message_filters.ApproximateTimeSynchronizer(
+            [left_sub, right_sub], queue_size=10, slop=SLOP_SEC
+        )
+        self._sync.registerCallback(on_stereo_pair)
+
         print(
-            f"[ros_zed_stereo] Subscribed: {self._left_topic}, {self._right_topic}",
+            f"[ros_zed_stereo] Subscribed (ApproximateTimeSynchronizer slop={SLOP_SEC*1000:.0f}ms): "
+            f"{self._left_topic}, {self._right_topic}",
             flush=True,
         )
 
