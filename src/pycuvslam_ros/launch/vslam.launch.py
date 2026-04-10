@@ -9,21 +9,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _topics_for_camera(camera: str) -> dict[str, str]:
-    zed_stem = (
-        f"/{camera}_base/zed_node"
-        if camera in ("zedm", "zed2i")
-        else "/zed/zed_node"
-    )
-    return {
-        "zed_left_topic": f"{zed_stem}/left/color/rect/image/compressed",
-        "zed_right_topic": f"{zed_stem}/right/color/rect/image/compressed",
-        "zed_imu_topic": f"{zed_stem}/imu/data",
-        "hawk_left_topic": "/left/image_rect",
-        "hawk_right_topic": "/right/image_rect",
-    }
-
-
 def generate_launch_description():
     pkg_share = get_package_share_directory("pycuvslam_ros")
     default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
@@ -52,7 +37,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, or ros_hawk_multicam",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, or ros_realsense_stereo",
     )
     hawk_rig_arg = DeclareLaunchArgument(
         "hawk_rig_file",
@@ -62,8 +47,8 @@ def generate_launch_description():
     camera_arg = DeclareLaunchArgument(
         "camera",
         default_value="zed2i",
-        description="Camera preset: zedm, zed2i (ZED topics under /{camera}_base/zed_node/...), or hawk (HAWK stereo on /left|/right/image_rect).",
-        choices=["zedm", "zed2i", "hawk"],
+        description="Camera model: zed|zedm|zed2i, hawk, realsensed435, realsensed455 (ZED: /{model}_base/zed_node; RealSense: /realsense435_base or /realsense455_base).",
+        choices=["zed", "zedm", "zed2i", "hawk", "realsensed435", "realsensed455"],
     )
     base_link_arg = DeclareLaunchArgument(
         "base_link_frame",
@@ -72,8 +57,6 @@ def generate_launch_description():
     )
 
     def launch_vslam(context, *args, **kwargs):
-        camera = LaunchConfiguration("camera").perform(context)
-        topics = _topics_for_camera(camera)
         return [
             Node(
                 package="pycuvslam_ros",
@@ -87,9 +70,9 @@ def generate_launch_description():
                             "enable_visualization"
                         ),
                         "tracker": LaunchConfiguration("tracker"),
+                        "camera": LaunchConfiguration("camera"),
                         "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
                         "base_link_frame": LaunchConfiguration("base_link_frame"),
-                        **topics,
                     }
                 ],
             )

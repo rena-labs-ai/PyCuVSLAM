@@ -1,7 +1,8 @@
 """ROS2 node that runs cuVSLAM and publishes odometry to /cuvslam/odometry.
 
-Supports RosMulticamTracker, RosZedStereoTracker, RosHawkStereoTracker,
-and RosHawkMulticamTracker.
+Supports RosMulticamTracker, RosZedStereoTracker, RosZedVIOTracker,
+RosRealSenseStereoTracker, RosHawkStereoTracker, and RosHawkMulticamTracker.
+Stereo image topics are derived from parameter camera (model id).
 Publishes TF: map->odom (identity), odom->base_link (from odometry).
 """
 
@@ -16,13 +17,36 @@ from nav_msgs.msg import Odometry
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
-from cuvslam_examples.realsense.tracker import RosMulticamTracker, StereoTracker
-from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker, ZedStereoTracker
+from cuvslam_examples.realsense.tracker import RosMulticamTracker, RosRealSenseStereoTracker
+from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
 MAP_FRAME = "map"
+
+# Default ROS topic namespace (prefix) per RealSense camera model.
+_REALSENSE_TOPIC_BASE_DEFAULT = {
+    "realsensed435": "/realsense435_base",
+    "realsensed455": "/realsense455_base",
+}
+
+
+def _zed_stem(camera: str) -> str:
+    c = camera.lower().strip()
+    if c in ("zed", "zedm", "zed2i"):
+        return f"/{c}_base/zed_node"
+    return "/zed/zed_node"
+
+
+def _realsense_topic_base(camera: str) -> str:
+    c = camera.lower().strip()
+    if c not in _REALSENSE_TOPIC_BASE_DEFAULT:
+        raise ValueError(
+            f"Unknown RealSense camera model {camera!r}; expected one of "
+            f"{sorted(_REALSENSE_TOPIC_BASE_DEFAULT)}"
+        )
+    return _REALSENSE_TOPIC_BASE_DEFAULT[c]
 
 
 def _stamp_from_ns(timestamp_ns: int) -> Time:
@@ -39,21 +63,7 @@ def main() -> None:
     config_file_param = param_node.declare_parameter("config_file", "")
     enable_viz_param = param_node.declare_parameter("enable_visualization", False)
     tracker_param = param_node.declare_parameter("tracker", "ros_multicam")
-    zed_left_param = param_node.declare_parameter(
-        "zed_left_topic", "/zed/zed_node/left/color/rect/image/compressed"
-    )
-    zed_right_param = param_node.declare_parameter(
-        "zed_right_topic", "/zed/zed_node/right/color/rect/image/compressed"
-    )
-    zed_imu_param = param_node.declare_parameter(
-        "zed_imu_topic", "/zed/zed_node/imu/data"
-    )
-    hawk_left_param = param_node.declare_parameter(
-        "hawk_left_topic", "/hawk/left/image_raw/compressed"
-    )
-    hawk_right_param = param_node.declare_parameter(
-        "hawk_right_topic", "/hawk/right/image_raw/compressed"
-    )
+    camera_param = param_node.declare_parameter("camera", "zed2i")
     hawk_rig_param = param_node.declare_parameter(
         "hawk_rig_file", ""
     )
@@ -64,6 +74,7 @@ def main() -> None:
     config_file = config_file_param.value
     tracker_type = str(tracker_param.value)
     hawk_rig_file = str(hawk_rig_param.value)
+    camera_model = str(camera_param.value)
 
     if tracker_type == "ros_multicam" and not config_file:
         param_node.get_logger().error("config_file parameter is required for ros_multicam")
@@ -79,32 +90,32 @@ def main() -> None:
     enable_viz = enable_viz_param.value if isinstance(enable_viz_param.value, bool) else str(enable_viz_param.value).lower() == "true"
     param_node.destroy_node()
 
-    if tracker_type == "ros_hawk_stereo":
-        tracker = RosHawkStereoTracker(
-            left_topic=str(hawk_left_param.value),
-            right_topic=str(hawk_right_param.value),
-        )
-    elif tracker_type == "ros_hawk_multicam":
-        tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
-    elif tracker_type == "ros_zed_stereo":
-        tracker = RosZedStereoTracker(
-            left_topic=str(zed_left_param.value),
-            right_topic=str(zed_right_param.value),
-        )
-    elif tracker_type == "ros_zed_vio":
-        tracker = RosZedVIOTracker(
-            left_topic=str(zed_left_param.value),
-            right_topic=str(zed_right_param.value),
-            imu_topic=str(zed_imu_param.value),
-        )
-    elif tracker_type == "zed_stereo":
-        tracker = ZedStereoTracker()
-    elif tracker_type == "ros_multicam":
-        tracker = RosMulticamTracker(config_file=config_file)
-    elif tracker_type == "stereo":
-        tracker = StereoTracker()
-    else:
-        raise ValueError(f"Unknown tracker type: {tracker_type}")
+    zed_stem = _zed_stem(camera_model)
+    zed_left = f"{zed_stem}/left/color/rect/image/compressed"
+    zed_right = f"{zed_stem}/right/color/rect/image/compressed"
+    zed_imu = f"{zed_stem}/imu/data"
+    hawk_left = "/left/image_rect"
+    hawk_right = "/right/image_rect"
+
+    match tracker_type:
+        case "ros_hawk_stereo":
+            tracker = RosHawkStereoTracker(left_topic=hawk_left, right_topic=hawk_right)
+        case "ros_hawk_multicam":
+            tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
+        case "ros_zed_stereo":
+            tracker = RosZedStereoTracker(left_topic=zed_left, right_topic=zed_right)
+        case "ros_zed_vio":
+            tracker = RosZedVIOTracker(
+                left_topic=zed_left,
+                right_topic=zed_right,
+                imu_topic=zed_imu,
+            )
+        case "ros_realsense_stereo":
+            tracker = RosRealSenseStereoTracker(
+                topic_base=_realsense_topic_base(camera_model),
+            )
+        case _:
+            raise ValueError(f"Unknown tracker type: {tracker_type}")
 
     base_link_frame = str(base_link_param.value)
 
