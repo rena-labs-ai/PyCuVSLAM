@@ -27,8 +27,8 @@ MAP_FRAME = "map"
 
 # Default ROS topic namespace (prefix) per RealSense camera model.
 _REALSENSE_TOPIC_BASE_DEFAULT = {
-    "realsensed435": "/realsense435_base",
-    "realsensed455": "/realsense455_base",
+    "realsensed435": "/realsensed435_base",
+    "realsensed455": "/realsensed455_base",
 }
 
 

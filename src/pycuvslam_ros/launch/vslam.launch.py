@@ -47,7 +47,7 @@ def generate_launch_description():
     camera_arg = DeclareLaunchArgument(
         "camera",
         default_value="zed2i",
-        description="Camera model: zed|zedm|zed2i, hawk, realsensed435, realsensed455 (ZED: /{model}_base/zed_node; RealSense: /realsense435_base or /realsense455_base).",
+        description="Camera model: zed|zedm|zed2i, hawk, realsensed435, realsensed455 (ZED: /{model}_base/zed_node; RealSense: /realsensed435_base or /realsensed455_base).",
         choices=["zed", "zedm", "zed2i", "hawk", "realsensed435", "realsensed455"],
     )
     base_link_arg = DeclareLaunchArgument(
