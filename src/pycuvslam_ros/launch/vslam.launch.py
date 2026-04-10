@@ -4,9 +4,24 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _topics_for_camera(camera: str) -> dict[str, str]:
+    zed_stem = (
+        f"/{camera}_base/zed_node"
+        if camera in ("zedm", "zed2i")
+        else "/zed/zed_node"
+    )
+    return {
+        "zed_left_topic": f"{zed_stem}/left/color/rect/image/compressed",
+        "zed_right_topic": f"{zed_stem}/right/color/rect/image/compressed",
+        "zed_imu_topic": f"{zed_stem}/imu/data",
+        "hawk_left_topic": "/left/image_rect",
+        "hawk_right_topic": "/right/image_rect",
+    }
 
 
 def generate_launch_description():
@@ -26,7 +41,7 @@ def generate_launch_description():
     )
     log_dir_arg = DeclareLaunchArgument(
         "log_dir",
-        default_value="./",
+        default_value="./outputs",
         description="Directory for odom diff logging",
     )
     enable_viz_arg = DeclareLaunchArgument(
@@ -44,56 +59,41 @@ def generate_launch_description():
         default_value=default_hawk_rig,
         description="Path to hawk rig YAML (for ros_hawk_multicam). Topics and extrinsics per stereo pair.",
     )
-    zed_left_arg = DeclareLaunchArgument(
-        "zed_left_topic",
-        default_value="/zed_base/zed_node/left/color/rect/image/compressed",
-        description="ZED left image topic (for ros_zed_stereo)",
-    )
-    zed_right_arg = DeclareLaunchArgument(
-        "zed_right_topic",
-        default_value="/zed_base/zed_node/right/color/rect/image/compressed",
-        description="ZED right image topic (for ros_zed_stereo)",
-    )
-    zed_imu_arg = DeclareLaunchArgument(
-        "zed_imu_topic",
-        default_value="/zed/zed_node/imu/data",
-        description="ZED IMU topic (for ros_zed_vio)",
-    )
-    hawk_left_arg = DeclareLaunchArgument(
-        "hawk_left_topic",
-        default_value="/left/image_rect",
-        description="HAWK left image topic (for ros_hawk_stereo)",
-    )
-    hawk_right_arg = DeclareLaunchArgument(
-        "hawk_right_topic",
-        default_value="/right/image_rect",
-        description="HAWK right image topic (for ros_hawk_stereo)",
+    camera_arg = DeclareLaunchArgument(
+        "camera",
+        default_value="zed2i",
+        description="Camera preset: zedm, zed2i (ZED topics under /{camera}_base/zed_node/...), or hawk (HAWK stereo on /left|/right/image_rect).",
+        choices=["zedm", "zed2i", "hawk"],
     )
     base_link_arg = DeclareLaunchArgument(
         "base_link_frame",
         default_value="zed_camera_link",
         description="Child frame for odom TF (odom -> base_link_frame)",
     )
-    vslam_node = Node(
-        package="pycuvslam_ros",
-        executable="vslam_node",
-        name="vslam",
-        output="screen",
-        parameters=[
-            {
-                "config_file": LaunchConfiguration("config_file"),
-                "enable_visualization": LaunchConfiguration("enable_visualization"),
-                "tracker": LaunchConfiguration("tracker"),
-                "zed_left_topic": LaunchConfiguration("zed_left_topic"),
-                "zed_right_topic": LaunchConfiguration("zed_right_topic"),
-                "zed_imu_topic": LaunchConfiguration("zed_imu_topic"),
-                "hawk_left_topic": LaunchConfiguration("hawk_left_topic"),
-                "hawk_right_topic": LaunchConfiguration("hawk_right_topic"),
-                "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
-                "base_link_frame": LaunchConfiguration("base_link_frame"),
-            }
-        ],
-    )
+
+    def launch_vslam(context, *args, **kwargs):
+        camera = LaunchConfiguration("camera").perform(context)
+        topics = _topics_for_camera(camera)
+        return [
+            Node(
+                package="pycuvslam_ros",
+                executable="vslam_node",
+                name="vslam",
+                output="screen",
+                parameters=[
+                    {
+                        "config_file": LaunchConfiguration("config_file"),
+                        "enable_visualization": LaunchConfiguration(
+                            "enable_visualization"
+                        ),
+                        "tracker": LaunchConfiguration("tracker"),
+                        "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
+                        "base_link_frame": LaunchConfiguration("base_link_frame"),
+                        **topics,
+                    }
+                ],
+            )
+        ]
 
     odom_diff_logger = Node(
         package="pycuvslam_ros",
@@ -115,13 +115,9 @@ def generate_launch_description():
         log_dir_arg,
         enable_viz_arg,
         tracker_arg,
-        zed_left_arg,
-        zed_right_arg,
-        zed_imu_arg,
-        hawk_left_arg,
-        hawk_right_arg,
         hawk_rig_arg,
+        camera_arg,
         base_link_arg,
-        vslam_node,
+        OpaqueFunction(function=launch_vslam),
         odom_diff_logger,
     ])

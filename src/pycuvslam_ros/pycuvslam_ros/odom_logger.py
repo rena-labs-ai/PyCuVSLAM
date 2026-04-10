@@ -78,7 +78,7 @@ class OdomDiffLogger(Node):
             self._ref_trajectory.append((r.position.x, r.position.y, self._quat_to_yaw(r.orientation)))
 
     def _out_path(self) -> Path:
-        out_dir = self._log_dir / "experiments"
+        out_dir = self._log_dir
         out_dir.mkdir(exist_ok=True)
         return out_dir / f"{self._experiment}.png"
 
@@ -131,7 +131,7 @@ def _save_results(ref, other, jitter_points, experiment, log_dir) -> None:
         _log(f"No ground truth available. Plotting {n} cuvslam-only samples.")
 
     try:
-        out_dir = log_dir / "experiments"
+        out_dir = log_dir / "outputs"
         out_dir.mkdir(exist_ok=True)
         out_path = out_dir / f"{experiment}.png"
         plot(ref, other, experiment, out_path, metrics=metrics if metrics else None,
