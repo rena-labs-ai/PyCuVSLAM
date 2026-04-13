@@ -20,7 +20,11 @@ import pyzed.sl as sl
 import cuvslam as vslam
 
 from cuvslam_examples.realsense import TrackingResult
-from cuvslam_examples.realsense.camera_utils import get_rs_imu, get_rs_stereo_rig, get_rs_vio_rig
+from cuvslam_examples.realsense.camera_utils import (
+    get_rs_imu,
+    get_rs_stereo_rig,
+    get_rs_vio_rig,
+)
 from cuvslam_examples.realsense.tracker import (
     BaseTracker,
     _CameraInfoCollector,
@@ -175,6 +179,82 @@ class ZedStereoTracker(BaseTracker):
             )
 
 
+def _collect_zed_stereo_camera_info(
+    left_topic: str, right_topic: str, node_name: str, log_prefix: str
+):
+    """Spin a temporary ROS node to collect CameraInfo for left and right cameras.
+
+    Returns (left_msg, right_msg) or raises TimeoutError.
+    """
+    import time as _time
+    from functools import partial
+
+    import rclpy
+    from rclpy.node import Node
+    from sensor_msgs.msg import CameraInfo
+
+    left_info_topic = _zed_image_to_camera_info_topic(left_topic)
+    right_info_topic = _zed_image_to_camera_info_topic(right_topic)
+    print(
+        f"[{log_prefix}] Waiting for CameraInfo on {left_info_topic}, {right_info_topic} ..."
+    )
+
+    collector = _CameraInfoCollector(["left", "right"])
+    node = Node(node_name)
+    node.create_subscription(
+        CameraInfo, left_info_topic, partial(collector.on_info, "left"), 10
+    )
+    node.create_subscription(
+        CameraInfo, right_info_topic, partial(collector.on_info, "right"), 10
+    )
+
+    deadline = _time.time() + 30.0
+    while not collector.has_all() and _time.time() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.5)
+    node.destroy_node()
+
+    missing = [k for k, v in collector.received.items() if v is None]
+    if missing:
+        raise TimeoutError(f"Did not receive CameraInfo for {missing} within 30 s")
+    print(f"[{log_prefix}] CameraInfo received")
+
+    left_msg = collector.received["left"]
+    right_msg = collector.received["right"]
+    assert left_msg is not None and right_msg is not None
+    return left_msg, right_msg
+
+
+def _build_zed_stereo_camera_params(left_msg, right_msg) -> Dict[str, Dict]:
+    """Build the camera_params dict (left/right intrinsics + right extrinsics) from CameraInfo msgs."""
+    # Baseline from right camera P matrix: P[0,3] = -fx*baseline
+    fx_right = right_msg.p[0]
+    baseline = -right_msg.p[3] / fx_right if fx_right != 0 else 0.12
+    right_extrinsics = [[1, 0, 0, baseline], [0, 1, 0, 0], [0, 0, 1, 0]]
+    return {
+        "left": {
+            "intrinsics": _make_intrinsics_like(
+                left_msg.k[0],
+                left_msg.k[4],
+                left_msg.k[2],
+                left_msg.k[5],
+                left_msg.width,
+                left_msg.height,
+            ),
+        },
+        "right": {
+            "intrinsics": _make_intrinsics_like(
+                right_msg.k[0],
+                right_msg.k[4],
+                right_msg.k[2],
+                right_msg.k[5],
+                right_msg.width,
+                right_msg.height,
+            ),
+            "extrinsics": right_extrinsics,
+        },
+    }
+
+
 class RosZedStereoTracker(BaseTracker):
     """Stereo tracking from ZED ROS CompressedImage topics."""
 
@@ -191,76 +271,13 @@ class RosZedStereoTracker(BaseTracker):
         self._running = False
 
     def setup_camera_parameters(self) -> Dict[str, Dict]:
-        import time
-        from functools import partial
-
-        import rclpy
-        from rclpy.node import Node
-        from sensor_msgs.msg import CameraInfo
-
-        left_info_topic = _zed_image_to_camera_info_topic(self._left_topic)
-        right_info_topic = _zed_image_to_camera_info_topic(self._right_topic)
-
-        print(
-            f"[ros_zed_stereo] Waiting for CameraInfo on {left_info_topic}, {right_info_topic} ..."
+        left_msg, right_msg = _collect_zed_stereo_camera_info(
+            self._left_topic,
+            self._right_topic,
+            node_name="ros_zed_stereo_camera_info",
+            log_prefix="ros_zed_stereo",
         )
-
-        collector = _CameraInfoCollector(["left", "right"])
-        node = Node("ros_zed_stereo_camera_info")
-        node.create_subscription(
-            CameraInfo, left_info_topic, partial(collector.on_info, "left"), 10
-        )
-        node.create_subscription(
-            CameraInfo, right_info_topic, partial(collector.on_info, "right"), 10
-        )
-
-        deadline = time.time() + 30.0
-        while not collector.has_all() and time.time() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.5)
-        node.destroy_node()
-
-        missing = [k for k, v in collector.received.items() if v is None]
-        if missing:
-            raise TimeoutError(f"Did not receive CameraInfo for {missing} within 30 s")
-        print("[ros_zed_stereo] CameraInfo received")
-
-        left_msg = collector.received["left"]
-        right_msg = collector.received["right"]
-        assert left_msg is not None and right_msg is not None
-
-        # Baseline from right camera P matrix: P[0,3] = -fx*baseline
-        fx_right = right_msg.p[0]
-        baseline = -right_msg.p[3] / fx_right if fx_right != 0 else 0.12
-
-        right_extrinsics = [
-            [1, 0, 0, baseline],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-        ]
-
-        return {
-            "left": {
-                "intrinsics": _make_intrinsics_like(
-                    left_msg.k[0],
-                    left_msg.k[4],
-                    left_msg.k[2],
-                    left_msg.k[5],
-                    left_msg.width,
-                    left_msg.height,
-                ),
-            },
-            "right": {
-                "intrinsics": _make_intrinsics_like(
-                    right_msg.k[0],
-                    right_msg.k[4],
-                    right_msg.k[2],
-                    right_msg.k[5],
-                    right_msg.width,
-                    right_msg.height,
-                ),
-                "extrinsics": right_extrinsics,
-            },
-        }
+        return _build_zed_stereo_camera_params(left_msg, right_msg)
 
     def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
         return vslam.Tracker.OdometryConfig(
@@ -272,11 +289,7 @@ class RosZedStereoTracker(BaseTracker):
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
-        h = camera_params["left"]["intrinsics"].height
-        return get_rs_stereo_rig(
-            camera_params,
-            # border_bottom=h // 4,
-        )
+        return get_rs_stereo_rig(camera_params)
 
     def create_slam_config(self) -> vslam.Tracker.SlamConfig:
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
@@ -299,23 +312,33 @@ class RosZedStereoTracker(BaseTracker):
 
         frames_fed = [0]
         raw_counts = [0, 0]
+        decode_sum_ms = [0.0]
+        track_sum_ms = [0.0]
 
         def _log_stats():
             while self._running:
                 time.sleep(1.0)
+                n = frames_fed[0]
+                d_avg = decode_sum_ms[0] / n if n else 0.0
+                t_avg = track_sum_ms[0] / n if n else 0.0
                 print(
                     f"[ros_zed_stereo] raw_cam_0={raw_counts[0]}/s raw_cam_1={raw_counts[1]}/s "
-                    f"fed={frames_fed[0]}/s",
+                    f"fed={n}/s avg_decode_ms={d_avg:.2f} avg_track_ms={t_avg:.2f}",
                     flush=True,
                 )
                 frames_fed[0] = 0
                 raw_counts[0] = 0
                 raw_counts[1] = 0
+                decode_sum_ms[0] = 0.0
+                track_sum_ms[0] = 0.0
 
         threading.Thread(target=_log_stats, daemon=True).start()
 
         def on_stereo_pair(left_msg, right_msg):
-            ts = left_msg.header.stamp.sec * 1_000_000_000 + left_msg.header.stamp.nanosec
+            ts = (
+                left_msg.header.stamp.sec * 1_000_000_000
+                + left_msg.header.stamp.nanosec
+            )
 
             t_decode = time.monotonic()
             images = [
@@ -337,6 +360,8 @@ class RosZedStereoTracker(BaseTracker):
                 return
 
             frames_fed[0] += 1
+            decode_sum_ms[0] += decode_ms
+            track_sum_ms[0] += track_ms
 
             landmarks = [
                 Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
@@ -358,8 +383,12 @@ class RosZedStereoTracker(BaseTracker):
         right_sub = message_filters.Subscriber(
             self._node, CompressedImage, self._right_topic, qos_profile=qos
         )
-        left_sub.registerCallback(lambda _: raw_counts.__setitem__(0, raw_counts[0] + 1))
-        right_sub.registerCallback(lambda _: raw_counts.__setitem__(1, raw_counts[1] + 1))
+        left_sub.registerCallback(
+            lambda _: raw_counts.__setitem__(0, raw_counts[0] + 1)
+        )
+        right_sub.registerCallback(
+            lambda _: raw_counts.__setitem__(1, raw_counts[1] + 1)
+        )
         self._sync = message_filters.ApproximateTimeSynchronizer(
             [left_sub, right_sub], queue_size=10, slop=SLOP_SEC
         )
@@ -390,7 +419,7 @@ IMU_JITTER_THRESHOLD_NS = 12 * 1e6
 
 
 def _lookup_zed_imu_extrinsics(timeout_sec: float = 30.0):
-    """Look up cam_from_imu transform via TF (zed_imu_link -> zed_left_camera_optical_frame).
+    """Look up cam_from_imu transform via TF (zed_imu_link -> zed_left_camera_frame).
 
     Returns an object with .translation attribute compatible with rig_from_imu_pose().
     """
@@ -411,14 +440,17 @@ def _lookup_zed_imu_extrinsics(timeout_sec: float = 30.0):
                 "zed_left_camera_frame", "zed_imu_link", rclpy.time.Time()
             )
             break
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ):
             continue
     node.destroy_node()
 
     if transform is None:
         raise TimeoutError(
-            "Could not look up TF zed_imu_link -> zed_left_camera_frame "
-            f"within {timeout_sec}s"
+            f"Could not look up TF zed_imu_link -> zed_left_camera_frame within {timeout_sec}s"
         )
 
     t = transform.transform.translation
@@ -446,68 +478,19 @@ class RosZedVIOTracker(BaseTracker):
         self._running = False
 
     def setup_camera_parameters(self) -> Dict[str, Dict]:
-        import time
-        from functools import partial
-
-        import rclpy
-        from rclpy.node import Node
-        from sensor_msgs.msg import CameraInfo
-
-        left_info_topic = _zed_image_to_camera_info_topic(self._left_topic)
-        right_info_topic = _zed_image_to_camera_info_topic(self._right_topic)
-
-        print(f"[ros_zed_vio] Waiting for CameraInfo on {left_info_topic}, {right_info_topic} ...")
-
-        collector = _CameraInfoCollector(["left", "right"])
-        node = Node("ros_zed_vio_camera_info")
-        node.create_subscription(CameraInfo, left_info_topic, partial(collector.on_info, "left"), 10)
-        node.create_subscription(CameraInfo, right_info_topic, partial(collector.on_info, "right"), 10)
-
-        deadline = time.time() + 30.0
-        while not collector.has_all() and time.time() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.5)
-        node.destroy_node()
-
-        missing = [k for k, v in collector.received.items() if v is None]
-        if missing:
-            raise TimeoutError(f"Did not receive CameraInfo for {missing} within 30 s")
-        print("[ros_zed_vio] CameraInfo received")
-
-        left_msg = collector.received["left"]
-        right_msg = collector.received["right"]
-        assert left_msg is not None and right_msg is not None
-
-        fx_right = right_msg.p[0]
-        baseline = -right_msg.p[3] / fx_right if fx_right != 0 else 0.12
-
-        right_extrinsics = [
-            [1, 0, 0, baseline],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-        ]
+        left_msg, right_msg = _collect_zed_stereo_camera_info(
+            self._left_topic,
+            self._right_topic,
+            node_name="ros_zed_vio_camera_info",
+            log_prefix="ros_zed_vio",
+        )
+        params = _build_zed_stereo_camera_params(left_msg, right_msg)
 
         print("[ros_zed_vio] Looking up IMU extrinsics from TF ...")
         cam_from_imu = _lookup_zed_imu_extrinsics()
         print(f"[ros_zed_vio] cam_from_imu translation: {cam_from_imu.translation}")
-
-        return {
-            "left": {
-                "intrinsics": _make_intrinsics_like(
-                    left_msg.k[0], left_msg.k[4], left_msg.k[2], left_msg.k[5],
-                    left_msg.width, left_msg.height,
-                ),
-            },
-            "right": {
-                "intrinsics": _make_intrinsics_like(
-                    right_msg.k[0], right_msg.k[4], right_msg.k[2], right_msg.k[5],
-                    right_msg.width, right_msg.height,
-                ),
-                "extrinsics": right_extrinsics,
-            },
-            "imu": {
-                "cam_from_imu": cam_from_imu,
-            },
-        }
+        params["imu"] = {"cam_from_imu": cam_from_imu}
+        return params
 
     def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
         return vslam.Tracker.OdometryConfig(
@@ -529,6 +512,7 @@ class RosZedVIOTracker(BaseTracker):
     def start_streaming(
         self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
+        import message_filters
         from sensor_msgs.msg import CompressedImage, Imu
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -541,51 +525,95 @@ class RosZedVIOTracker(BaseTracker):
             depth=1,
         )
 
-        self._frames_fed = 0
-        self._imu_fed = 0
-        self._last_log_time = time.monotonic()
-        self._last_imu_ts: Optional[int] = None
-        self._imu_buffer: list = []
+        imu_buffer: List[vslam.ImuMeasurement] = []
+        last_imu_ts: List[Optional[int]] = [None]
+        frames_fed = [0]
+        imu_fed = [0]
+
+        def _log_stats():
+            while self._running:
+                time.sleep(1.0)
+                print(
+                    f"[ros_zed_vio] fed={frames_fed[0]}/s imu={imu_fed[0]}/s",
+                    flush=True,
+                )
+                frames_fed[0] = 0
+                imu_fed[0] = 0
+
+        threading.Thread(target=_log_stats, daemon=True).start()
 
         def _on_imu(msg: Imu) -> None:
             ts_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-            if self._last_imu_ts is not None and ts_ns <= self._last_imu_ts:
+            if last_imu_ts[0] is not None and ts_ns <= last_imu_ts[0]:
                 return
-            self._last_imu_ts = ts_ns
-
+            last_imu_ts[0] = ts_ns
             m = vslam.ImuMeasurement()
             m.timestamp_ns = ts_ns
             a = msg.linear_acceleration
             g = msg.angular_velocity
             m.linear_accelerations = [a.x, a.y, a.z]
             m.angular_velocities = [g.x, g.y, g.z]
-            self._imu_buffer.append(m)
+            imu_buffer.append(m)
 
-        aggregator = _VIOFrameAggregator(
-            tracker, output_queue, self,
-            decode_fn=_decode_zed_compressed_image,
-        )
+        def on_stereo_pair(left_msg, right_msg):
+            ts = (
+                left_msg.header.stamp.sec * 1_000_000_000
+                + left_msg.header.stamp.nanosec
+            )
 
-        first_received = {"left": True, "right": True}
+            # Flush IMU measurements up to this image timestamp
+            remaining = []
+            for m in imu_buffer:
+                if m.timestamp_ns <= ts:
+                    tracker.register_imu_measurement(0, m)
+                    imu_fed[0] += 1
+                else:
+                    remaining.append(m)
+            imu_buffer[:] = remaining
 
-        def on_left(msg):
-            if first_received["left"]:
-                print("[ros_zed_vio] First left frame received", flush=True)
-                first_received["left"] = False
-            aggregator.on_compressed_msg(0, msg)
+            images = [
+                _decode_zed_compressed_image(left_msg.data),
+                _decode_zed_compressed_image(right_msg.data),
+            ]
+            if any(img is None for img in images):
+                print("[ros_zed_vio] Warning: decode failed", flush=True)
+                return
 
-        def on_right(msg):
-            if first_received["right"]:
-                print("[ros_zed_vio] First right frame received", flush=True)
-                first_received["right"] = False
-            aggregator.on_compressed_msg(1, msg)
+            vo_pose_estimate, slam_pose = tracker.track(ts, images)
+            if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+                print("[ros_zed_vio] Warning: track failed", flush=True)
+                return
+
+            frames_fed[0] += 1
+            landmarks = [
+                Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
+            ]
+            output_queue.put(
+                TrackingResult(
+                    ts,
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    images,
+                    landmarks,
+                )
+            )
 
         self._node = Node("ros_zed_vio_frames")
-        self._node.create_subscription(CompressedImage, self._left_topic, on_left, qos_profile=qos)
-        self._node.create_subscription(CompressedImage, self._right_topic, on_right, qos_profile=qos)
+        left_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._left_topic, qos_profile=qos
+        )
+        right_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._right_topic, qos_profile=qos
+        )
+        self._sync = message_filters.ApproximateTimeSynchronizer(
+            [left_sub, right_sub], queue_size=10, slop=SLOP_SEC
+        )
+        self._sync.registerCallback(on_stereo_pair)
         self._node.create_subscription(Imu, self._imu_topic, _on_imu, qos_profile=qos)
+
         print(
-            f"[ros_zed_vio] Subscribed: {self._left_topic}, {self._right_topic}, {self._imu_topic}",
+            f"[ros_zed_vio] Subscribed (ApproximateTimeSynchronizer slop={SLOP_SEC*1000:.0f}ms): "
+            f"{self._left_topic}, {self._right_topic}, {self._imu_topic}",
             flush=True,
         )
 
@@ -600,78 +628,3 @@ class RosZedVIOTracker(BaseTracker):
             self._spin_thread.join(timeout=2.0)
         if hasattr(self, "_node"):
             self._node.destroy_node()
-
-
-class _VIOFrameAggregator:
-    """Collects stereo compressed images; when both arrive, decodes and calls tracker.track().
-    Logs fed frames/sec on the parent tracker."""
-
-    def __init__(
-        self,
-        tracker: vslam.Tracker,
-        output_queue: queue.Queue,
-        parent: RosZedVIOTracker,
-        decode_fn=None,
-    ) -> None:
-        self._tracker = tracker
-        self._output_queue = output_queue
-        self._parent = parent
-        self._decode_fn = decode_fn or _decode_zed_compressed_image
-        self._queues = [queue.Queue(maxsize=1) for _ in range(2)]
-
-    def on_compressed_msg(self, slot: int, msg) -> None:
-        ts = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        q = self._queues[slot]
-        try:
-            q.get_nowait()
-        except queue.Empty:
-            pass
-        q.put_nowait((ts, bytes(msg.data)))
-
-        if any(q.empty() for q in self._queues):
-            return
-
-        pairs = [q.get_nowait() for q in self._queues]
-        ts_primary = pairs[0][0]
-
-        # Flush IMU buffer: feed only samples with ts <= image ts
-        buf = self._parent._imu_buffer
-        fed = 0
-        remaining = []
-        for m in buf:
-            if m.timestamp_ns <= ts_primary:
-                self._tracker.register_imu_measurement(0, m)
-                fed += 1
-            else:
-                remaining.append(m)
-        self._parent._imu_buffer = remaining
-        self._parent._imu_fed += fed
-
-        images = [self._decode_fn(raw) for _, raw in pairs]
-        if any(img is None for img in images):
-            return
-
-        vo_pose_estimate, slam_pose = self._tracker.track(ts_primary, images)
-        if vo_pose_estimate.world_from_rig is None or slam_pose is None:
-            return
-
-        self._parent._frames_fed += 1
-        now = time.monotonic()
-        if now - self._parent._last_log_time >= 1.0:
-            print(
-                f"[ros_zed_vio] fed {self._parent._frames_fed} frames/s, "
-                f"imu {self._parent._imu_fed}/s",
-                flush=True,
-            )
-            self._parent._frames_fed = 0
-            self._parent._imu_fed = 0
-            self._parent._last_log_time = now
-
-        self._output_queue.put(
-            TrackingResult(
-                ts_primary,
-                Pose(vo_pose_estimate.world_from_rig.pose),
-                Pose(slam_pose),
-                images,
-            )
-        )
