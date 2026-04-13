@@ -1364,16 +1364,32 @@ def _image_topic_to_camera_info_topic(image_topic: str) -> str:
     return f"{base}/camera_info"
 
 
+def _decode_compressed_depth(raw_bytes: bytes) -> Optional[np.ndarray]:
+    """Decode a ROS compressedDepth (PNG) message to a uint16 depth array.
+
+    ROS image_transport prepends a 12-byte config header before the PNG payload.
+    """
+    import cv2
+
+    HEADER_SIZE = 12
+    if len(raw_bytes) <= HEADER_SIZE:
+        return None
+    img = cv2.imdecode(
+        np.frombuffer(raw_bytes[HEADER_SIZE:], dtype=np.uint8), cv2.IMREAD_UNCHANGED
+    )
+    return img  # uint16, shape (H, W)
+
+
 class RosRealsenseRGBDTracker(BaseTracker):
-    """RGBD tracking from RealSense ROS topics (compressed color + raw depth).
+    """RGBD tracking from RealSense ROS topics (compressed color + compressedDepth).
 
     Default topics follow the standard RealSense ROS2 wrapper conventions:
       color: {base}/color/image_raw/compressed
-      depth: {base}/depth/image_rect_raw
+      depth: {base}/aligned_depth_to_color/image_raw/compressedDepth
     """
 
     DEFAULT_COLOR_SUFFIX = "color/image_raw/compressed"
-    DEFAULT_DEPTH_SUFFIX = "depth/image_rect_raw"
+    DEFAULT_DEPTH_SUFFIX = "aligned_depth_to_color/image_raw/compressedDepth"
 
     def __init__(
         self,
@@ -1433,7 +1449,7 @@ class RosRealsenseRGBDTracker(BaseTracker):
             enable_final_landmarks_export=True,
             odometry_mode=vslam.Tracker.OdometryMode.RGBD,
             rgbd_settings=rgbd_settings,
-            rectified_stereo_camera=True,
+            rectified_stereo_camera=False,
         )
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
@@ -1451,7 +1467,7 @@ class RosRealsenseRGBDTracker(BaseTracker):
         import message_filters
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-        from sensor_msgs.msg import CompressedImage, Image
+        from sensor_msgs.msg import CompressedImage
 
         self._running = True
 
@@ -1486,9 +1502,10 @@ class RosRealsenseRGBDTracker(BaseTracker):
                 print("[ros_rs_rgbd] Warning: color decode failed", flush=True)
                 return
 
-            depth_image = np.frombuffer(bytes(depth_msg.data), dtype=np.uint16).reshape(
-                depth_msg.height, depth_msg.width
-            )
+            depth_image = _decode_compressed_depth(bytes(depth_msg.data))
+            if depth_image is None:
+                print("[ros_rs_rgbd] Warning: depth decode failed", flush=True)
+                return
 
             vo_pose_estimate, slam_pose = tracker.track(
                 ts, images=[color_image], depths=[depth_image]
@@ -1514,7 +1531,7 @@ class RosRealsenseRGBDTracker(BaseTracker):
             self._node, CompressedImage, self._color_topic, qos_profile=qos
         )
         depth_sub = message_filters.Subscriber(
-            self._node, Image, self._depth_topic, qos_profile=qos
+            self._node, CompressedImage, self._depth_topic, qos_profile=qos
         )
         color_sub.registerCallback(lambda _: raw_counts.__setitem__(0, raw_counts[0] + 1))
         depth_sub.registerCallback(lambda _: raw_counts.__setitem__(1, raw_counts[1] + 1))

@@ -425,7 +425,7 @@ ZED_IMU_FREQUENCY = 200
 IMU_JITTER_THRESHOLD_NS = 12 * 1e6
 
 
-def _lookup_zed_imu_extrinsics(camera: str, timeout_sec: float = 30.0):
+def _lookup_zed_imu_extrinsics(camera: str, timeout_sec: float = 5.0):
     """Look up cam_from_imu transform via TF for a given ZED camera model.
 
     Frame names are derived from the camera model, e.g. for 'zed2i':

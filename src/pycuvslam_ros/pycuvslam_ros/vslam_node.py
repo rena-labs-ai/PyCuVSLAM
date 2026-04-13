@@ -25,7 +25,7 @@ from nav_msgs.msg import Odometry
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
-from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker
+from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
 
@@ -35,8 +35,8 @@ MAP_FRAME = "map"
 
 # Default ROS topic namespace (prefix) per RealSense camera model.
 _REALSENSE_TOPIC_BASE_DEFAULT = {
-    "realsensed435": "/realsensed435_base",
-    "realsensed455": "/realsensed455_base",
+    "realsensed435": "/realsensed435_base/camera",
+    "realsensed455": "/realsensed455_base/camera",
 }
 
 
@@ -125,6 +125,10 @@ def main() -> None:
             )
         case "ros_realsense_stereo":
             tracker = RosRealsenseStereoTracker(
+                topic_base=_realsense_topic_base(camera_model),
+            )
+        case "ros_realsense_rgbd":
+            tracker = RosRealsenseRGBDTracker(
                 topic_base=_realsense_topic_base(camera_model),
             )
         case _:

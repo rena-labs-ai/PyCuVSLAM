@@ -37,7 +37,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, or ros_realsense_stereo",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, or ros_realsense_rgbd",
     )
     hawk_rig_arg = DeclareLaunchArgument(
         "hawk_rig_file",
@@ -92,15 +92,17 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription([
-        config_file_arg,
-        experiment_arg,
-        log_dir_arg,
-        enable_viz_arg,
-        tracker_arg,
-        hawk_rig_arg,
-        camera_arg,
-        base_link_arg,
-        OpaqueFunction(function=launch_vslam),
-        odom_diff_logger,
-    ])
+    return LaunchDescription(
+        [
+            config_file_arg,
+            experiment_arg,
+            log_dir_arg,
+            enable_viz_arg,
+            tracker_arg,
+            hawk_rig_arg,
+            camera_arg,
+            base_link_arg,
+            OpaqueFunction(function=launch_vslam),
+            odom_diff_logger,
+        ]
+    )
