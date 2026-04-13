@@ -121,6 +121,7 @@ def main() -> None:
                 left_topic=zed_left,
                 right_topic=zed_right,
                 imu_topic=zed_imu,
+                camera=camera_model,
             )
         case "ros_realsense_stereo":
             tracker = RosRealsenseStereoTracker(

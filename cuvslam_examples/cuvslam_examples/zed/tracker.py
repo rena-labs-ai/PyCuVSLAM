@@ -334,11 +334,18 @@ class RosZedStereoTracker(BaseTracker):
 
         threading.Thread(target=_log_stats, daemon=True).start()
 
+        last_ts = [0]
+
         def on_stereo_pair(left_msg, right_msg):
             ts = (
                 left_msg.header.stamp.sec * 1_000_000_000
                 + left_msg.header.stamp.nanosec
             )
+
+            # Skip non-monotonic timestamps
+            if ts <= last_ts[0]:
+                return
+            last_ts[0] = ts
 
             t_decode = time.monotonic()
             images = [
@@ -418,14 +425,20 @@ ZED_IMU_FREQUENCY = 200
 IMU_JITTER_THRESHOLD_NS = 12 * 1e6
 
 
-def _lookup_zed_imu_extrinsics(timeout_sec: float = 30.0):
-    """Look up cam_from_imu transform via TF (zed_imu_link -> zed_left_camera_frame).
+def _lookup_zed_imu_extrinsics(camera: str, timeout_sec: float = 30.0):
+    """Look up cam_from_imu transform via TF for a given ZED camera model.
+
+    Frame names are derived from the camera model, e.g. for 'zed2i':
+      {camera}_base_left_camera_frame <- {camera}_base_imu_link
 
     Returns an object with .translation attribute compatible with rig_from_imu_pose().
     """
     import rclpy
     from rclpy.node import Node
     import tf2_ros
+
+    target_frame = f"{camera}_base_left_camera_frame"
+    source_frame = f"{camera}_base_imu_link"
 
     node = Node("zed_vio_tf_lookup")
     tf_buffer = tf2_ros.Buffer()
@@ -437,7 +450,7 @@ def _lookup_zed_imu_extrinsics(timeout_sec: float = 30.0):
         rclpy.spin_once(node, timeout_sec=0.5)
         try:
             transform = tf_buffer.lookup_transform(
-                "zed_left_camera_frame", "zed_imu_link", rclpy.time.Time()
+                target_frame, source_frame, rclpy.time.Time()
             )
             break
         except (
@@ -450,7 +463,7 @@ def _lookup_zed_imu_extrinsics(timeout_sec: float = 30.0):
 
     if transform is None:
         raise TimeoutError(
-            f"Could not look up TF zed_imu_link -> zed_left_camera_frame within {timeout_sec}s"
+            f"Could not look up TF {source_frame} -> {target_frame} within {timeout_sec}s"
         )
 
     t = transform.transform.translation
@@ -471,10 +484,12 @@ class RosZedVIOTracker(BaseTracker):
         left_topic: str = DEFAULT_ZED_LEFT_TOPIC,
         right_topic: str = DEFAULT_ZED_RIGHT_TOPIC,
         imu_topic: str = DEFAULT_ZED_IMU_TOPIC,
+        camera: str = "zed2i",
     ) -> None:
         self._left_topic = left_topic
         self._right_topic = right_topic
         self._imu_topic = imu_topic
+        self._camera = camera
         self._running = False
 
     def setup_camera_parameters(self) -> Dict[str, Dict]:
@@ -487,7 +502,7 @@ class RosZedVIOTracker(BaseTracker):
         params = _build_zed_stereo_camera_params(left_msg, right_msg)
 
         print("[ros_zed_vio] Looking up IMU extrinsics from TF ...")
-        cam_from_imu = _lookup_zed_imu_extrinsics()
+        cam_from_imu = _lookup_zed_imu_extrinsics(self._camera)
         print(f"[ros_zed_vio] cam_from_imu translation: {cam_from_imu.translation}")
         params["imu"] = {"cam_from_imu": cam_from_imu}
         return params
@@ -542,6 +557,8 @@ class RosZedVIOTracker(BaseTracker):
 
         threading.Thread(target=_log_stats, daemon=True).start()
 
+        last_ts = [0]
+
         def _on_imu(msg: Imu) -> None:
             ts_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
             if last_imu_ts[0] is not None and ts_ns <= last_imu_ts[0]:
@@ -560,6 +577,11 @@ class RosZedVIOTracker(BaseTracker):
                 left_msg.header.stamp.sec * 1_000_000_000
                 + left_msg.header.stamp.nanosec
             )
+
+            # Skip non-monotonic timestamps
+            if ts <= last_ts[0]:
+                return
+            last_ts[0] = ts
 
             # Flush IMU measurements up to this image timestamp
             remaining = []
