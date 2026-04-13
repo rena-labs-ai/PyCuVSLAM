@@ -111,6 +111,101 @@ def _per_sample_rpe_rotation(ref, est, delta=1) -> list[float]:
     return errors
 
 
+# ---------------------------------------------------------------------------
+# Color palette for estimated trajectories (reference is always blue)
+# ---------------------------------------------------------------------------
+_REF_COLOR = "#1f77b4"
+_EST_COLORS = [
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#d62728",  # red
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # gray
+    "#bcbd22",  # olive
+    "#17becf",  # teal
+]
+
+
+def plot_combined(
+    ref: list[tuple],
+    estimated_list: list[tuple[str, list[tuple]]],
+    title: str,
+    out_path: Path,
+) -> dict[str, float]:
+    """Plot one reference trajectory against multiple estimated trajectories.
+
+    Layout: left = 2D XY trajectories, right = ATE over time (all on one panel).
+    Returns {label: ate_rmse} for each estimated trajectory that had a paired ref.
+    """
+    fig, (ax_traj, ax_ate) = plt.subplots(
+        1, 2, figsize=(16, 7), gridspec_kw={"width_ratios": [2, 1]}
+    )
+
+    if ref:
+        xs, ys = [p[0] for p in ref], [p[1] for p in ref]
+        ax_traj.plot(xs, ys, "-", label="reference", linewidth=2, color=_REF_COLOR)
+        ax_traj.plot(xs[0], ys[0], "o", color=_REF_COLOR, markersize=8)
+        ax_traj.plot(xs[-1], ys[-1], "s", color=_REF_COLOR, markersize=8)
+
+    ate_results: dict[str, float] = {}
+    for i, (label, est) in enumerate(estimated_list):
+        color = _EST_COLORS[i % len(_EST_COLORS)]
+        if est:
+            xs, ys = [p[0] for p in est], [p[1] for p in est]
+            ax_traj.plot(xs, ys, "--", label=label, linewidth=1.5, color=color)
+            ax_traj.plot(xs[0], ys[0], "o", color=color, markersize=6)
+            ax_traj.plot(xs[-1], ys[-1], "s", color=color, markersize=6)
+        if ref and est:
+            n = min(len(ref), len(est))
+            ate_rmse, _ = compute_ate(ref[:n], est[:n])
+            ate_results[label] = ate_rmse
+            ate_errors = [
+                math.hypot(ref[j][0] - est[j][0], ref[j][1] - est[j][1])
+                for j in range(n)
+            ]
+            ax_ate.plot(
+                range(n), ate_errors, "-", linewidth=1.2, color=color,
+                label=f"{label}  RMSE={ate_rmse:.3f}m",
+            )
+            ax_ate.fill_between(range(n), ate_errors, alpha=0.10, color=color)
+
+    ax_traj.set_aspect("equal")
+    ax_traj.grid(True, alpha=0.3)
+    ax_traj.legend(loc="upper left", fontsize=8)
+    ax_traj.set_title(title, fontweight="bold")
+    ax_traj.set_xlabel("x (m)")
+    ax_traj.set_ylabel("y (m)")
+
+    ax_ate.set_title("ATE over time")
+    ax_ate.set_xlabel("sample")
+    ax_ate.set_ylabel("error (m)")
+    ax_ate.grid(True, alpha=0.3)
+    ax_ate.legend(loc="upper left", fontsize=7)
+
+    n_summary_lines = len(ate_results)
+    bottom_margin = 0.04 + n_summary_lines * 0.045
+
+    if ate_results:
+        summary = "\n".join(
+            f"{lbl:35s}  ATE RMSE = {v:.4f} m"
+            for lbl, v in sorted(ate_results.items())
+        )
+        fig.text(
+            0.99, 0.01, summary, fontsize=9, family="monospace",
+            va="bottom", ha="right",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="wheat", alpha=0.6),
+        )
+
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=bottom_margin)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return ate_results
+
+
 def plot(
     ground_truth: list[tuple[float, float]],
     other: list[tuple[float, float]],
@@ -119,106 +214,65 @@ def plot(
     metrics: dict[str, float] | None = None,
     jitter_points: list[tuple[float, float]] | None = None,
 ) -> None:
+    """Single-experiment live preview plot (reference vs one estimated trajectory)."""
     if not ground_truth and not other:
         raise ValueError("No trajectory data")
 
-    if metrics is None:
-        ate_rmse, ate_mean = compute_ate(ground_truth, other)
-        rpe_rmse, rpe_mean = compute_rpe(ground_truth, other)
-        rpe_rot_rmse, rpe_rot_mean = 0.0, 0.0
-    else:
-        ate_rmse = metrics["ate_rmse"]
-        ate_mean = metrics["ate_mean"]
-        rpe_rmse = metrics["rpe_rmse"]
-        rpe_mean = metrics["rpe_mean"]
-        rpe_rot_rmse = metrics.get("rpe_rot_rmse", 0.0)
-        rpe_rot_mean = metrics.get("rpe_rot_mean", 0.0)
-
+    ate_rmse, ate_mean = (
+        (metrics["ate_rmse"], metrics["ate_mean"]) if metrics
+        else compute_ate(ground_truth, other)
+    )
     n_samples = min(len(ground_truth), len(other))
     ate_errors = [
         math.hypot(ground_truth[i][0] - other[i][0], ground_truth[i][1] - other[i][1])
         for i in range(n_samples)
     ]
-    rpe_trans_errors = _per_sample_rpe_translation(ground_truth, other)
-    has_yaw = n_samples > 0 and len(ground_truth[0]) >= 3 and len(other[0]) >= 3
-    rpe_rot_errors = _per_sample_rpe_rotation(ground_truth, other) if has_yaw else []
 
-    gs = plt.GridSpec(3, 2, width_ratios=[3, 1.5], hspace=0.45)
-    fig = plt.figure(figsize=(16, 10))
+    fig, (ax_traj, ax_ate) = plt.subplots(
+        1, 2, figsize=(14, 6), gridspec_kw={"width_ratios": [2, 1]}
+    )
 
-    ax_traj = fig.add_subplot(gs[:, 0])
     if ground_truth:
         xf, yf = [p[0] for p in ground_truth], [p[1] for p in ground_truth]
-        ax_traj.plot(xf, yf, "-", label="ground truth", linewidth=2, color="#1f77b4")
-        ax_traj.plot(xf[0], yf[0], "o", color="#1f77b4", markersize=8)
-        ax_traj.plot(xf[-1], yf[-1], "s", color="#1f77b4", markersize=8)
+        ax_traj.plot(xf, yf, "-", label="reference", linewidth=2, color=_REF_COLOR)
+        ax_traj.plot(xf[0], yf[0], "o", color=_REF_COLOR, markersize=8)
+        ax_traj.plot(xf[-1], yf[-1], "s", color=_REF_COLOR, markersize=8)
     if other:
         xc, yc = [p[0] for p in other], [p[1] for p in other]
-        ax_traj.plot(xc, yc, "--", label="estimated", linewidth=2, color="#ff7f0e")
-        ax_traj.plot(xc[0], yc[0], "o", color="#ff7f0e", markersize=8)
-        ax_traj.plot(xc[-1], yc[-1], "s", color="#ff7f0e", markersize=8)
+        ax_traj.plot(xc, yc, "--", label="estimated", linewidth=2, color=_EST_COLORS[0])
+        ax_traj.plot(xc[0], yc[0], "o", color=_EST_COLORS[0], markersize=8)
+        ax_traj.plot(xc[-1], yc[-1], "s", color=_EST_COLORS[0], markersize=8)
     if jitter_points:
-        jx = [p[0] for p in jitter_points]
-        jy = [p[1] for p in jitter_points]
-        ax_traj.scatter(jx, jy, s=12, c="red", zorder=5, label=f"jitter ({len(jitter_points)})")
+        ax_traj.scatter(
+            [p[0] for p in jitter_points], [p[1] for p in jitter_points],
+            s=12, c="red", zorder=5, label=f"jitter ({len(jitter_points)})",
+        )
     ax_traj.set_aspect("equal")
     ax_traj.grid(True, alpha=0.3)
     ax_traj.legend(loc="upper left")
     ax_traj.set_title(experiment_name, fontweight="bold")
-    ax_traj.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"x: {v:.2f}"))
-    ax_traj.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"y: {v:.2f}"))
     ax_traj.set_xlabel("x (m)")
     ax_traj.set_ylabel("y (m)")
 
-    ax_ate = fig.add_subplot(gs[0, 1])
     if ate_errors:
         ax_ate.plot(range(n_samples), ate_errors, "-", linewidth=1.2, color="#d62728")
         ax_ate.axhline(ate_mean, ls="--", color="#888", lw=1, label=f"mean={ate_mean:.4f}m")
         ax_ate.fill_between(range(n_samples), ate_errors, alpha=0.15, color="#d62728")
-    ax_ate.set_ylabel("error (m)")
     ax_ate.set_title("ATE over time")
+    ax_ate.set_xlabel("sample")
+    ax_ate.set_ylabel("error (m)")
     ax_ate.grid(True, alpha=0.3)
     ax_ate.legend(loc="upper left", fontsize=7)
 
-    ax_rpe_t = fig.add_subplot(gs[1, 1])
-    if rpe_trans_errors:
-        ax_rpe_t.plot(range(len(rpe_trans_errors)), rpe_trans_errors, "-", linewidth=1.2, color="#2ca02c")
-        ax_rpe_t.axhline(rpe_mean, ls="--", color="#888", lw=1, label=f"mean={rpe_mean:.4f}m")
-        ax_rpe_t.fill_between(range(len(rpe_trans_errors)), rpe_trans_errors, alpha=0.15, color="#2ca02c")
-    ax_rpe_t.set_ylabel("error (m)")
-    ax_rpe_t.set_title("RPE translation over time")
-    ax_rpe_t.grid(True, alpha=0.3)
-    ax_rpe_t.legend(loc="upper left", fontsize=7)
-
-    ax_rpe_r = fig.add_subplot(gs[2, 1])
-    if rpe_rot_errors:
-        rpe_rot_deg = [math.degrees(e) for e in rpe_rot_errors]
-        ax_rpe_r.plot(range(len(rpe_rot_deg)), rpe_rot_deg, "-", linewidth=1.2, color="#9467bd")
-        ax_rpe_r.axhline(math.degrees(rpe_rot_mean), ls="--", color="#888", lw=1,
-                         label=f"mean={math.degrees(rpe_rot_mean):.4f}°")
-        ax_rpe_r.fill_between(range(len(rpe_rot_deg)), rpe_rot_deg, alpha=0.15, color="#9467bd")
-    ax_rpe_r.set_xlabel("sample")
-    ax_rpe_r.set_ylabel("error (deg)")
-    ax_rpe_r.set_title("RPE rotation over time")
-    ax_rpe_r.grid(True, alpha=0.3)
-    ax_rpe_r.legend(loc="upper left", fontsize=7)
-
-    metrics_text = (
-        f"ATE RMSE:     {ate_rmse:.4f} m\n"
-        f"ATE Mean:     {ate_mean:.4f} m\n"
-        f"RPE RMSE:     {rpe_rmse:.4f} m\n"
-        f"RPE Mean:     {rpe_mean:.4f} m\n"
-        f"RPE Rot RMSE: {math.degrees(rpe_rot_rmse):.4f} deg\n"
-        f"RPE Rot Mean: {math.degrees(rpe_rot_mean):.4f} deg\n"
-        f"Samples:      {n_samples}"
-    )
     fig.text(
-        0.99, 0.01, metrics_text, fontsize=9, family="monospace",
-        verticalalignment="bottom", horizontalalignment="right",
+        0.99, 0.01,
+        f"ATE RMSE: {ate_rmse:.4f} m\nSamples:  {n_samples}",
+        fontsize=9, family="monospace", va="bottom", ha="right",
         bbox=dict(boxstyle="round,pad=0.4", facecolor="wheat", alpha=0.6),
     )
 
     plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
 

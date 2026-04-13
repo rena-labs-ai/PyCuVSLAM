@@ -55,8 +55,14 @@ def generate_launch_description():
         default_value="zed_camera_link",
         description="Child frame for odom TF (odom -> base_link_frame)",
     )
+    odom_topic_arg = DeclareLaunchArgument(
+        "odom_topic",
+        default_value="/cuvslam/odometry",
+        description="Topic to publish odometry on (remapped from /cuvslam/odometry).",
+    )
 
     def launch_vslam(context, *args, **kwargs):
+        odom_topic = context.launch_configurations.get("odom_topic", "/cuvslam/odometry")
         return [
             Node(
                 package="pycuvslam_ros",
@@ -66,31 +72,16 @@ def generate_launch_description():
                 parameters=[
                     {
                         "config_file": LaunchConfiguration("config_file"),
-                        "enable_visualization": LaunchConfiguration(
-                            "enable_visualization"
-                        ),
+                        "enable_visualization": LaunchConfiguration("enable_visualization"),
                         "tracker": LaunchConfiguration("tracker"),
                         "camera": LaunchConfiguration("camera"),
                         "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
                         "base_link_frame": LaunchConfiguration("base_link_frame"),
                     }
                 ],
+                remappings=[("/cuvslam/odometry", odom_topic)],
             )
         ]
-
-    odom_diff_logger = Node(
-        package="pycuvslam_ros",
-        executable="odom_diff_logger",
-        name="odom_diff_logger",
-        parameters=[
-            {
-                "experiment": LaunchConfiguration("experiment"),
-                "log_dir": LaunchConfiguration("log_dir"),
-                "ref_odom_topic": "/Odometry",
-                "other_odom_topic": "/cuvslam/odometry",
-            }
-        ],
-    )
 
     return LaunchDescription(
         [
@@ -102,7 +93,7 @@ def generate_launch_description():
             hawk_rig_arg,
             camera_arg,
             base_link_arg,
+            odom_topic_arg,
             OpaqueFunction(function=launch_vslam),
-            odom_diff_logger,
         ]
     )

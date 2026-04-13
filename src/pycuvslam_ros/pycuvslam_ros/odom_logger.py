@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Log odom x,y from two odometry topics every 1s, compare drift.
+"""Odometry trajectory logger and live plotter.
 
-Computes standard SLAM evaluation metrics on shutdown:
-- ATE (Absolute Trajectory Error): RMSE of pointwise Euclidean distances
-- RPE (Relative Pose Error): RMSE of relative displacement errors over delta steps
+Subscribes to one reference odometry topic and one or more estimated odometry
+topics, samples at 1 Hz, and periodically writes a combined trajectory PNG.
+
+Parameters
+----------
+ref_odom_topic           : str   - reference topic (default: /Odometry)
+estimated_odom_topics    : str   - comma-separated estimated topics
+                                   (default: /cuvslam/odometry)
+estimated_labels         : str   - comma-separated labels (default: topic names)
+estimated_odom_rotations : str   - comma-separated rotation offsets in degrees
+                                   applied to each estimated trajectory (default: all 0)
+out_path                 : str   - output PNG path (default: ./odom_plot.png)
+title                    : str   - plot title (default: "Odometry Comparison")
+update_interval_sec      : float - seconds between plot refreshes (default: 2.0)
 """
 
 import math
@@ -14,44 +25,63 @@ from typing import Optional
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from geometry_msgs.msg import PointStamped
 from nav_msgs.msg import Odometry
 
-from pycuvslam_ros.plot import compute_ate, compute_rpe, compute_rpe_rotation, plot
+from pycuvslam_ros.plot import compute_ate, plot_combined
 
-_log = lambda msg: print(f"[odom_diff_logger] {msg}", file=sys.stderr)
+_log = lambda msg: print(f"[odom_logger] {msg}", file=sys.stderr)
 
 
-class OdomDiffLogger(Node):
+class OdomLogger(Node):
     def __init__(self) -> None:
-        super().__init__("odom_diff_logger")
-        self.declare_parameter("experiment", "default")
-        self.declare_parameter("log_dir", "/tmp")
+        super().__init__("odom_logger")
+
         self.declare_parameter("ref_odom_topic", "/Odometry")
-        self.declare_parameter("other_odom_topic", "/cuvslam/odometry")
-        exp = self.get_parameter("experiment").get_parameter_value().string_value
-        self._log_dir = Path(self.get_parameter("log_dir").get_parameter_value().string_value)
+        self.declare_parameter("estimated_odom_topics", "/cuvslam/odometry")
+        self.declare_parameter("estimated_labels", "")
+        self.declare_parameter("out_path", "./odom_plot.png")
+        self.declare_parameter("title", "Odometry Comparison")
+        self.declare_parameter("update_interval_sec", 2.0)
+
         ref_topic = self.get_parameter("ref_odom_topic").get_parameter_value().string_value
-        other_topic = self.get_parameter("other_odom_topic").get_parameter_value().string_value
-        self._experiment = exp
-        self._last_ref: Optional[Odometry] = None
-        self._last_other: Optional[Odometry] = None
-        self._ref_trajectory: list[tuple[float, float, float]] = []
-        self._other_trajectory: list[tuple[float, float, float]] = []
-        self._jitter_points: list[tuple[float, float]] = []
+        est_topics_raw = self.get_parameter("estimated_odom_topics").get_parameter_value().string_value
+        labels_raw = self.get_parameter("estimated_labels").get_parameter_value().string_value
+        self._out_path = Path(self.get_parameter("out_path").get_parameter_value().string_value)
+        self._title = self.get_parameter("title").get_parameter_value().string_value
+        update_interval = self.get_parameter("update_interval_sec").get_parameter_value().double_value
+
+        est_topics = [t.strip() for t in est_topics_raw.split(",") if t.strip()]
+        if not est_topics:
+            raise ValueError("estimated_odom_topics must contain at least one topic")
+
+        labels_list = [l.strip() for l in labels_raw.split(",") if l.strip()]
+        self._labels = [
+            labels_list[i] if i < len(labels_list) else t
+            for i, t in enumerate(est_topics)
+        ]
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
-        self.create_subscription(Odometry, ref_topic, self._on_ref, qos)
-        self.create_subscription(Odometry, other_topic, self._on_other, qos)
-        self.create_subscription(PointStamped, "/cuvslam/jitter", self._on_jitter, 10)
-        self.get_logger().info(f"Comparing '{ref_topic}' vs '{other_topic}'")
 
+        self._last_ref: Optional[Odometry] = None
+        self._ref_traj: list[tuple] = []
+        self._last_est: list[Optional[Odometry]] = [None] * len(est_topics)
+        self._est_trajs: list[list[tuple]] = [[] for _ in est_topics]
+
+        self.create_subscription(Odometry, ref_topic, self._on_ref, qos)
+        for i, topic in enumerate(est_topics):
+            self.create_subscription(
+                Odometry, topic,
+                lambda msg, idx=i: self._on_est(msg, idx),
+                qos,
+            )
+
+        self.get_logger().info(f"ref={ref_topic}  estimated={est_topics}  labels={self._labels}")
         self.create_timer(1.0, self._sample)
-        self.create_timer(2.0, self._update_plot)
+        self.create_timer(update_interval, self._update_plot)
 
     @staticmethod
     def _quat_to_yaw(q) -> float:
@@ -62,94 +92,56 @@ class OdomDiffLogger(Node):
     def _on_ref(self, msg: Odometry) -> None:
         self._last_ref = msg
 
-    def _on_other(self, msg: Odometry) -> None:
-        self._last_other = msg
-
-    def _on_jitter(self, msg: PointStamped) -> None:
-        self._jitter_points.append((msg.point.x, msg.point.y))
+    def _on_est(self, msg: Odometry, idx: int) -> None:
+        self._last_est[idx] = msg
 
     def _sample(self) -> None:
-        if self._last_other is None:
+        any_est = any(m is not None for m in self._last_est)
+        if not any_est:
             return
-        c = self._last_other.pose.pose
-        self._other_trajectory.append((c.position.x, c.position.y, self._quat_to_yaw(c.orientation)))
         if self._last_ref is not None:
             r = self._last_ref.pose.pose
-            self._ref_trajectory.append((r.position.x, r.position.y, self._quat_to_yaw(r.orientation)))
-
-    def _out_path(self) -> Path:
-        out_dir = self._log_dir
-        out_dir.mkdir(exist_ok=True)
-        return out_dir / f"{self._experiment}.png"
+            self._ref_traj.append((r.position.x, r.position.y, self._quat_to_yaw(r.orientation)))
+        for i, msg in enumerate(self._last_est):
+            if msg is not None:
+                c = msg.pose.pose
+                self._est_trajs[i].append((c.position.x, c.position.y, self._quat_to_yaw(c.orientation)))
 
     def _update_plot(self) -> None:
-        if len(self._other_trajectory) < 2:
+        if not any(len(t) >= 2 for t in self._est_trajs):
             return
-        n = min(len(self._ref_trajectory), len(self._other_trajectory)) if self._ref_trajectory else 0
-        ref = self._ref_trajectory[:n] if n else []
-        other = self._other_trajectory[-n:] if n else list(self._other_trajectory)
         try:
-            metrics = _compute_metrics(ref, other) if ref else None
-            plot(ref, other, self._experiment, self._out_path(), metrics=metrics,
-                 jitter_points=list(self._jitter_points))
+            estimated_list = list(zip(self._labels, self._est_trajs))
+            plot_combined(self._ref_traj, estimated_list, self._title, self._out_path)
         except Exception as e:
             self.get_logger().warn(f"Plot update failed: {e}")
 
-    def get_results(self) -> tuple[list, list, list, str, Path]:
-        n = min(len(self._ref_trajectory), len(self._other_trajectory)) if self._ref_trajectory else 0
-        ref = self._ref_trajectory[:n] if n else []
-        other = self._other_trajectory[-n:] if n else list(self._other_trajectory)
-        return ref, other, list(self._jitter_points), self._experiment, self._log_dir
+    def get_results(self):
+        return self._ref_traj, list(zip(self._labels, self._est_trajs))
 
 
-def _compute_metrics(ref, other) -> dict[str, float]:
-    ate_rmse, ate_mean = compute_ate(ref, other)
-    rpe_rmse, rpe_mean = compute_rpe(ref, other, delta=1)
-    rpe_rot_rmse, rpe_rot_mean = compute_rpe_rotation(ref, other, delta=1)
-    return {
-        "ate_rmse": ate_rmse, "ate_mean": ate_mean,
-        "rpe_rmse": rpe_rmse, "rpe_mean": rpe_mean,
-        "rpe_rot_rmse": rpe_rot_rmse, "rpe_rot_mean": rpe_rot_mean,
-    }
-
-
-def _save_results(ref, other, jitter_points, experiment, log_dir) -> None:
-    n = len(other)
-    if n < 2:
-        _log(f"Only {n} sample(s) collected, skipping plot.")
-        return
-
-    metrics = _compute_metrics(ref, other) if ref else None
-    if metrics:
-        _log(
-            f"ATE RMSE={metrics['ate_rmse']:.4f}m  "
-            f"RPE RMSE={metrics['rpe_rmse']:.4f}m  "
-            f"RPE Rot RMSE={math.degrees(metrics['rpe_rot_rmse']):.4f}deg  "
-            f"({min(len(ref), len(other))} paired samples)"
-        )
-    else:
-        _log(f"No ground truth available. Plotting {n} cuvslam-only samples.")
-
-    try:
-        out_dir = log_dir / "outputs"
-        out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"{experiment}.png"
-        plot(ref, other, experiment, out_path, metrics=metrics if metrics else None,
-             jitter_points=jitter_points)
-        _log(f"Saved trajectory plot to {out_path}")
-    except Exception as e:
-        _log(f"Failed to generate trajectory plot: {e}")
+def _report(ref_traj, estimated_list) -> None:
+    for label, est in estimated_list:
+        n = len(est)
+        if n < 2:
+            _log(f"[{label}] Only {n} sample(s), skipping.")
+            continue
+        if ref_traj:
+            ate_rmse, _ = compute_ate(ref_traj, est)
+            _log(f"[{label}] ATE RMSE = {ate_rmse:.4f} m  ({min(len(ref_traj), n)} paired samples)")
+        else:
+            _log(f"[{label}] {n} samples (no reference).")
 
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = OdomDiffLogger()
+    node = OdomLogger()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
 
-    ref, other, jitter_points, experiment, log_dir = node.get_results()
+    ref_traj, estimated_list = node.get_results()
 
     try:
         node.destroy_node()
@@ -160,7 +152,15 @@ def main(args=None) -> None:
     except Exception:
         pass
 
-    _save_results(ref, other, jitter_points, experiment, log_dir)
+    # Final plot + report
+    if any(len(est) >= 2 for _, est in estimated_list):
+        try:
+            out_path = node._out_path
+            plot_combined(ref_traj, estimated_list, node._title, out_path)
+            _log(f"Final plot saved to {out_path}")
+        except Exception as e:
+            _log(f"Failed to save final plot: {e}")
+    _report(ref_traj, estimated_list)
 
 
 if __name__ == "__main__":
