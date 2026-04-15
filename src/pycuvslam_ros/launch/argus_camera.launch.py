@@ -201,10 +201,38 @@ def generate_launch_description():
         output='screen',
     )
 
+    left_image_compressor = Node(
+        package='image_transport',
+        executable='republish',
+        name='left_image_compressor',
+        namespace=camera_namespace,
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'left/image_rect'),
+            ('out/compressed', 'left/image_rect/compressed'),
+        ],
+        output='screen',
+    )
+
+    right_image_compressor = Node(
+        package='image_transport',
+        executable='republish',
+        name='right_image_compressor',
+        namespace=camera_namespace,
+        arguments=['raw', 'compressed'],
+        remappings=[
+            ('in', 'right/image_rect'),
+            ('out/compressed', 'right/image_rect/compressed'),
+        ],
+        output='screen',
+    )
+
     return launch.LaunchDescription(
         launch_args + [
             container,
             left_camera_info_relay,
             right_camera_info_relay,
+            left_image_compressor,
+            right_image_compressor,
         ]
     )

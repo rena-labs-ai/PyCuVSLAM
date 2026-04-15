@@ -138,7 +138,7 @@ def main(args=None) -> None:
     node = OdomLogger()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
 
     ref_traj, estimated_list = node.get_results()

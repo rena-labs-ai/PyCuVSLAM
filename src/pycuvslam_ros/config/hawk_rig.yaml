@@ -1,9 +1,9 @@
 # Hawk Multi-Camera Rig Configuration
 
 stereo_cameras:
-  - name: 'front'
-    left_topic: '/front/left/image_rect'
-    right_topic: '/front/right/image_rect'
+  - name: 'hawk_base_front'
+    left_topic: '/hawk_base_front/left/image_rect'
+    right_topic: '/hawk_base_front/right/image_rect'
     left_camera:
       transform:            # identity – this camera defines the rig origin
         - [1, 0, 0, -0.075]
@@ -16,9 +16,9 @@ stereo_cameras:
         - [0, 0, 1, 0.0]
 
 # 28.2 (outer faces distance) - 2 * 1.6 (outer face to origin) = 25cm
-  - name: 'back'
-    left_topic: '/back/left/image_rect'
-    right_topic: '/back/right/image_rect'
+  - name: 'hawk_base_back'
+    left_topic: '/hawk_base_back/left/image_rect'
+    right_topic: '/hawk_base_back/right/image_rect'
     left_camera:
       transform:            # 180° around Y
         - [-1, 0, 0,  0.075]

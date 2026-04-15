@@ -167,14 +167,12 @@ def plot_combined(
             ]
             ax_ate.plot(
                 range(n), ate_errors, "-", linewidth=1.2, color=color,
-                label=f"{label}  RMSE={ate_rmse:.3f}m",
+                label=label,
             )
             ax_ate.fill_between(range(n), ate_errors, alpha=0.10, color=color)
 
     ax_traj.set_aspect("equal")
     ax_traj.grid(True, alpha=0.3)
-    ax_traj.legend(loc="upper left", fontsize=8)
-    ax_traj.set_title(title, fontweight="bold")
     ax_traj.set_xlabel("x (m)")
     ax_traj.set_ylabel("y (m)")
 
@@ -182,10 +180,24 @@ def plot_combined(
     ax_ate.set_xlabel("sample")
     ax_ate.set_ylabel("error (m)")
     ax_ate.grid(True, alpha=0.3)
-    ax_ate.legend(loc="upper left", fontsize=7)
 
-    n_summary_lines = len(ate_results)
-    bottom_margin = 0.04 + n_summary_lines * 0.045
+    # Fixed bottom margin: row 1 = recording name, row 2 = trajectory legend.
+    # Bottom strip layout (in figure coordinates):
+    #   0.00 - 0.04 : recording name (centred)
+    #   0.05 - 0.10 : trajectory legend (left) / ATE summary box (right)
+    #   0.18        : bottom edge of both axes (gives clear gap above the strip)
+    BOTTOM = 0.18
+
+    # Recording name — centred at the very bottom of the figure.
+    fig.text(0.5, 0.02, title, ha="center", va="bottom",
+             fontweight="bold", fontsize=11)
+
+    # Trajectory legend — anchored to figure coordinates just above the title.
+    handles, labels = ax_traj.get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels,
+                   loc="lower left", bbox_to_anchor=(0.01, 0.08),
+                   ncol=len(handles), fontsize=8, framealpha=0.9)
 
     if ate_results:
         summary = "\n".join(
@@ -193,13 +205,13 @@ def plot_combined(
             for lbl, v in sorted(ate_results.items())
         )
         fig.text(
-            0.99, 0.01, summary, fontsize=9, family="monospace",
+            0.99, 0.02, summary, fontsize=9, family="monospace",
             va="bottom", ha="right",
             bbox=dict(boxstyle="round,pad=0.4", facecolor="wheat", alpha=0.6),
         )
 
     plt.tight_layout()
-    plt.subplots_adjust(bottom=bottom_margin)
+    plt.subplots_adjust(bottom=BOTTOM)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
     plt.close(fig)

@@ -6,8 +6,10 @@ Stereo image topics are derived from parameter camera (model id).
 Publishes TF: map->odom (identity), odom->base_link (from odometry).
 """
 
+import subprocess
 import threading
 import time
+import yaml
 
 import rclpy
 from rclpy.node import Node
@@ -108,6 +110,23 @@ def main() -> None:
     zed_imu = f"{zed_stem}/imu/data"
     hawk_left = "/left/image_rect"
     hawk_right = "/right/image_rect"
+
+    # For ros_hawk_multicam, launch compressed→raw republishers for every topic in the rig.
+    # image_transport republish subscribes to <topic>/compressed and publishes <topic> (raw).
+    republisher_procs: list[subprocess.Popen] = []
+    if tracker_type == "ros_hawk_multicam":
+        with open(hawk_rig_file) as f:
+            rig_data = yaml.safe_load(f)
+        for cam in rig_data.get("stereo_cameras", []):
+            for topic in (cam["left_topic"], cam["right_topic"]):
+                cmd = [
+                    "ros2", "run", "image_transport", "republish",
+                    "compressed", "raw",
+                    "--ros-args",
+                    "-r", f"in/compressed:={topic}/compressed",
+                    "-r", f"out:={topic}",
+                ]
+                republisher_procs.append(subprocess.Popen(cmd))
 
     match tracker_type:
         case "ros_hawk_stereo":
@@ -211,6 +230,13 @@ def main() -> None:
         pass
     finally:
         node.destroy_node()
+        for proc in republisher_procs:
+            proc.terminate()
+        for proc in republisher_procs:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         try:
             rclpy.shutdown()
         except Exception:
