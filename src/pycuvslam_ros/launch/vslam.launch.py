@@ -13,6 +13,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("pycuvslam_ros")
     default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
     default_hawk_rig = os.path.join(pkg_share, "config", "hawk_rig.yaml")
+    default_oak_rig = os.path.join(pkg_share, "config", "oak_rig.yaml")
 
     config_file_arg = DeclareLaunchArgument(
         "config_file",
@@ -37,12 +38,17 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, or ros_realsense_rgbd",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, ros_realsense_rgbd, or ros_oak_multicam",
     )
     hawk_rig_arg = DeclareLaunchArgument(
         "hawk_rig_file",
         default_value=default_hawk_rig,
         description="Path to hawk rig YAML (for ros_hawk_multicam). Topics and extrinsics per stereo pair.",
+    )
+    oak_rig_arg = DeclareLaunchArgument(
+        "oak_rig_file",
+        default_value=default_oak_rig,
+        description="Path to OAK rig YAML (for ros_oak_multicam). Topics and extrinsics per stereo pair.",
     )
     camera_arg = DeclareLaunchArgument(
         "camera",
@@ -76,6 +82,7 @@ def generate_launch_description():
                         "tracker": LaunchConfiguration("tracker"),
                         "camera": LaunchConfiguration("camera"),
                         "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
+                        "oak_rig_file": LaunchConfiguration("oak_rig_file"),
                         "base_link_frame": LaunchConfiguration("base_link_frame"),
                     }
                 ],
@@ -91,6 +98,7 @@ def generate_launch_description():
             enable_viz_arg,
             tracker_arg,
             hawk_rig_arg,
+            oak_rig_arg,
             camera_arg,
             base_link_arg,
             odom_topic_arg,

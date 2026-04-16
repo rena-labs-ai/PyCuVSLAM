@@ -30,6 +30,7 @@ from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
+from cuvslam_examples.oak.tracker import RosOakMulticamTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -75,11 +76,13 @@ def main() -> None:
     tracker_param = param_node.declare_parameter("tracker", "ros_multicam")
     camera_param = param_node.declare_parameter("camera", "zed2i")
     hawk_rig_param = param_node.declare_parameter("hawk_rig_file", "")
+    oak_rig_param = param_node.declare_parameter("oak_rig_file", "")
     base_link_param = param_node.declare_parameter("base_link_frame", "zed_camera_link")
 
     config_file = config_file_param.value
     tracker_type = str(tracker_param.value)
     hawk_rig_file = str(hawk_rig_param.value)
+    oak_rig_file = str(oak_rig_param.value)
     camera_model = str(camera_param.value)
 
     if tracker_type == "ros_multicam" and not config_file:
@@ -92,6 +95,13 @@ def main() -> None:
     if tracker_type == "ros_hawk_multicam" and not hawk_rig_file:
         param_node.get_logger().error(
             "hawk_rig_file parameter is required for ros_hawk_multicam"
+        )
+        param_node.destroy_node()
+        rclpy.shutdown()
+        return
+    if tracker_type == "ros_oak_multicam" and not oak_rig_file:
+        param_node.get_logger().error(
+            "oak_rig_file parameter is required for ros_oak_multicam"
         )
         param_node.destroy_node()
         rclpy.shutdown()
@@ -133,6 +143,8 @@ def main() -> None:
             tracker = RosHawkStereoTracker(left_topic=hawk_left, right_topic=hawk_right)
         case "ros_hawk_multicam":
             tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
+        case "ros_oak_multicam":
+            tracker = RosOakMulticamTracker(rig_file=oak_rig_file)
         case "ros_zed_stereo":
             tracker = RosZedStereoTracker(left_topic=zed_left, right_topic=zed_right)
         case "ros_zed_vio":

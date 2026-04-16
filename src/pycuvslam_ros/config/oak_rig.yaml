@@ -1,0 +1,32 @@
+# OAK Multi-Camera Rig Configuration
+# OAK-D-PRO-W baseline: 75mm (±37.5mm from center)
+# Topics assume depthai depth pipeline with stereo.i_left_rect_publish_topic: true
+
+stereo_cameras:
+  - name: 'oak_base_front'
+    left_topic: '/oak_base_front/left/image_rect'
+    right_topic: '/oak_base_front/right/image_rect'
+    left_camera:
+      transform:            # identity – this camera defines the rig origin
+        - [1, 0, 0, -0.0375]
+        - [0, 1, 0,  0.0]
+        - [0, 0, 1,  0.0]
+    right_camera:
+      transform:
+        - [1, 0, 0, 0.0375]
+        - [0, 1, 0, 0.0]
+        - [0, 0, 1, 0.0]
+
+  # - name: 'oak_base_back'
+  #   left_topic: '/oak_base_back/left/image_rect'
+  #   right_topic: '/oak_base_back/right/image_rect'
+  #   left_camera:
+  #     transform:            # 180° around Y
+  #       - [-1, 0,  0,  0.0375]
+  #       - [ 0, 1,  0,  0.0]
+  #       - [ 0, 0, -1,  0.0]   # TODO: set Z translation (front-to-back distance in meters)
+  #   right_camera:
+  #     transform:
+  #       - [-1, 0,  0, -0.0375]
+  #       - [ 0, 1,  0,  0.0]
+  #       - [ 0, 0, -1,  0.0]   # TODO: set Z translation (front-to-back distance in meters)
