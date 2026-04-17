@@ -40,20 +40,7 @@ class Pipeline:
         camera_params = self._inner.setup_camera_parameters()
         self._odometry_config = self._inner.create_odometry_config()
         rig = self._inner.create_rig(camera_params)
-        for i, cam in enumerate(rig.cameras):
-            print(
-                f"  rig.cameras[{i}]: size={cam.size} focal={cam.focal} principal={cam.principal} "
-                f"distortion.model={cam.distortion.model.name} distortion.parameters={cam.distortion.parameters} "
-                f"rig_from_camera.translation={cam.rig_from_camera.translation} "
-                f"rig_from_camera.rotation={cam.rig_from_camera.rotation} "
-                f"borders=(t={cam.border_top},b={cam.border_bottom},l={cam.border_left},r={cam.border_right})"
-            )
-        if rig.imus:
-            for j, imu in enumerate(rig.imus):
-                print(
-                    f"  rig.imus[{j}]: frequency={imu.frequency} rig_from_imu.translation={imu.rig_from_imu.translation} "
-                    f"gyro_noise={imu.gyroscope_noise_density} accel_noise={imu.accelerometer_noise_density}"
-                )
+        print(rig)
         slam_cfg = self._inner.create_slam_config()
         self._tracker = vslam.Tracker(rig, self._odometry_config, slam_cfg)
         if self._enable_visualization:

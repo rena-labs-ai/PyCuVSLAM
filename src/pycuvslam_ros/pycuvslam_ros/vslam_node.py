@@ -30,7 +30,7 @@ from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
-from cuvslam_examples.oak.tracker import RosOakMulticamTracker
+from cuvslam_examples.oak.tracker import RosOakMulticamTracker, RosOakStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -120,6 +120,8 @@ def main() -> None:
     zed_imu = f"{zed_stem}/imu/data"
     hawk_left = "/left/image_rect"
     hawk_right = "/right/image_rect"
+    oak_left = "/oak_base_front/left/image_raw"
+    oak_right = "/oak_base_front/right/image_raw"
 
     # For ros_hawk_multicam, launch compressed→raw republishers for every topic in the rig.
     # image_transport republish subscribes to <topic>/compressed and publishes <topic> (raw).
@@ -143,6 +145,8 @@ def main() -> None:
             tracker = RosHawkStereoTracker(left_topic=hawk_left, right_topic=hawk_right)
         case "ros_hawk_multicam":
             tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
+        case "ros_oak_stereo":
+            tracker = RosOakStereoTracker(left_topic=oak_left, right_topic=oak_right)
         case "ros_oak_multicam":
             tracker = RosOakMulticamTracker(rig_file=oak_rig_file)
         case "ros_zed_stereo":

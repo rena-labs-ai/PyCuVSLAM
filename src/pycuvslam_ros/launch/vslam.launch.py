@@ -38,7 +38,7 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, ros_realsense_rgbd, or ros_oak_multicam",
+        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, ros_realsense_rgbd, ros_oak_stereo, or ros_oak_multicam",
     )
     hawk_rig_arg = DeclareLaunchArgument(
         "hawk_rig_file",
