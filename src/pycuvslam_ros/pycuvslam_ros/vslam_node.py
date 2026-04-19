@@ -3,7 +3,7 @@
 Supports RosMulticamTracker, RosZedStereoTracker, RosZedVIOTracker,
 RosRealSenseStereoTracker, RosHawkStereoTracker, and RosHawkMulticamTracker.
 Stereo image topics are derived from parameter camera (model id).
-Publishes TF: map->odom (identity), odom->base_link (from odometry).
+Publishes TF: map->odom (identity), odom->camera_link (from odometry).
 """
 
 import subprocess
@@ -75,15 +75,21 @@ def main() -> None:
     enable_viz_param = param_node.declare_parameter("enable_visualization", False)
     tracker_param = param_node.declare_parameter("tracker", "ros_multicam")
     camera_param = param_node.declare_parameter("camera", "zed2i")
-    hawk_rig_param = param_node.declare_parameter("hawk_rig_file", "")
-    oak_rig_param = param_node.declare_parameter("oak_rig_file", "")
-    base_link_param = param_node.declare_parameter("base_link_frame", "zed_camera_link")
+    rig_base_path_param = param_node.declare_parameter("rig_base_path", "")
+    camera_link_param = param_node.declare_parameter("camera_link", "")
 
     config_file = config_file_param.value
     tracker_type = str(tracker_param.value)
-    hawk_rig_file = str(hawk_rig_param.value)
-    oak_rig_file = str(oak_rig_param.value)
+    rig_base_path = str(rig_base_path_param.value)
     camera_model = str(camera_param.value)
+
+    # Per-tracker rig file lives at {rig_base_path}/<model>_rig.yaml
+    # (e.g. hawk_rig.yaml, oak_rig.yaml).
+    def _rig_file(model: str) -> str:
+        if not rig_base_path:
+            return ""
+        import os as _os
+        return _os.path.join(rig_base_path, f"{model}_rig.yaml")
 
     if tracker_type == "ros_multicam" and not config_file:
         param_node.get_logger().error(
@@ -92,16 +98,16 @@ def main() -> None:
         param_node.destroy_node()
         rclpy.shutdown()
         return
-    if tracker_type == "ros_hawk_multicam" and not hawk_rig_file:
+    if tracker_type == "ros_hawk_multicam" and not _rig_file("hawk"):
         param_node.get_logger().error(
-            "hawk_rig_file parameter is required for ros_hawk_multicam"
+            "rig_base_path must be set for ros_hawk_multicam (expects <path>/hawk_rig.yaml)"
         )
         param_node.destroy_node()
         rclpy.shutdown()
         return
-    if tracker_type == "ros_oak_multicam" and not oak_rig_file:
+    if tracker_type == "ros_oak_multicam" and not _rig_file("oak"):
         param_node.get_logger().error(
-            "oak_rig_file parameter is required for ros_oak_multicam"
+            "rig_base_path must be set for ros_oak_multicam (expects <path>/oak_rig.yaml)"
         )
         param_node.destroy_node()
         rclpy.shutdown()
@@ -120,14 +126,14 @@ def main() -> None:
     zed_imu = f"{zed_stem}/imu/data"
     hawk_left = "/left/image_rect"
     hawk_right = "/right/image_rect"
-    oak_left = "/oak_base_front/left/image_raw"
-    oak_right = "/oak_base_front/right/image_raw"
+    # OAK topics are derived from rena_bringup/config/config.yaml inside the
+    # RosOakStereoTracker itself (serial + image_mode → image_raw | image_rect).
 
     # For ros_hawk_multicam, launch compressed→raw republishers for every topic in the rig.
     # image_transport republish subscribes to <topic>/compressed and publishes <topic> (raw).
     republisher_procs: list[subprocess.Popen] = []
     if tracker_type == "ros_hawk_multicam":
-        with open(hawk_rig_file) as f:
+        with open(_rig_file("hawk")) as f:
             rig_data = yaml.safe_load(f)
         for cam in rig_data.get("stereo_cameras", []):
             for topic in (cam["left_topic"], cam["right_topic"]):
@@ -144,11 +150,11 @@ def main() -> None:
         case "ros_hawk_stereo":
             tracker = RosHawkStereoTracker(left_topic=hawk_left, right_topic=hawk_right)
         case "ros_hawk_multicam":
-            tracker = RosHawkMulticamTracker(rig_file=hawk_rig_file)
+            tracker = RosHawkMulticamTracker(rig_file=_rig_file("hawk"))
         case "ros_oak_stereo":
-            tracker = RosOakStereoTracker(left_topic=oak_left, right_topic=oak_right)
+            tracker = RosOakStereoTracker()
         case "ros_oak_multicam":
-            tracker = RosOakMulticamTracker(rig_file=oak_rig_file)
+            tracker = RosOakMulticamTracker(rig_file=_rig_file("oak"))
         case "ros_zed_stereo":
             tracker = RosZedStereoTracker(left_topic=zed_left, right_topic=zed_right)
         case "ros_zed_vio":
@@ -169,7 +175,7 @@ def main() -> None:
         case _:
             raise ValueError(f"Unknown tracker type: {tracker_type}")
 
-    base_link_frame = str(base_link_param.value)
+    camera_link = str(camera_link_param.value) or f"{camera_model}_camera_link"
 
     class VslamNode(Node):
         def __init__(self, child_frame: str) -> None:
@@ -221,7 +227,7 @@ def main() -> None:
                 msg.twist = TwistWithCovariance()
                 self._odom_pub.publish(msg)
 
-                # odom -> base_link
+                # odom -> camera_link
                 tf = TransformStamped()
                 tf.header.stamp = stamp
                 tf.header.frame_id = ODOM_FRAME
@@ -238,7 +244,7 @@ def main() -> None:
             self._pipeline.stop()
             super().destroy_node()
 
-    node = VslamNode(child_frame=base_link_frame)
+    node = VslamNode(child_frame=camera_link)
     try:
         while rclpy.ok():
             time.sleep(0.1)

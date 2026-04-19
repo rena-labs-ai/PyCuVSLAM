@@ -11,14 +11,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("pycuvslam_ros")
-    default_config = os.path.join(pkg_share, "config", "frame_agx_rig.yaml")
-    default_hawk_rig = os.path.join(pkg_share, "config", "hawk_rig.yaml")
-    default_oak_rig = os.path.join(pkg_share, "config", "oak_rig.yaml")
+    default_rig_base = os.path.join(pkg_share, "config")
 
     config_file_arg = DeclareLaunchArgument(
         "config_file",
-        default_value=default_config,
-        description="Path to rig YAML (stereo_cameras with name, serial, left/right_camera.transform). Topics derived as /{name}/camera/infra1|2/image_rect_raw/compressed",
+        default_value=os.path.join(pkg_share, "config", "frame_agx_rig.yaml"),
+        description="Path to rig YAML (ros_multicam only).",
     )
     experiment_arg = DeclareLaunchArgument(
         "experiment",
@@ -38,38 +36,50 @@ def generate_launch_description():
     tracker_arg = DeclareLaunchArgument(
         "tracker",
         default_value="ros_multicam",
-        description="Tracker: ros_multicam, ros_zed_stereo, ros_zed_vio, ros_hawk_stereo, ros_hawk_multicam, ros_realsense_stereo, ros_realsense_rgbd, ros_oak_stereo, or ros_oak_multicam",
+        description="Tracker id.",
     )
-    hawk_rig_arg = DeclareLaunchArgument(
-        "hawk_rig_file",
-        default_value=default_hawk_rig,
-        description="Path to hawk rig YAML (for ros_hawk_multicam). Topics and extrinsics per stereo pair.",
-    )
-    oak_rig_arg = DeclareLaunchArgument(
-        "oak_rig_file",
-        default_value=default_oak_rig,
-        description="Path to OAK rig YAML (for ros_oak_multicam). Topics and extrinsics per stereo pair.",
+    rig_base_path_arg = DeclareLaunchArgument(
+        "rig_base_path",
+        default_value=default_rig_base,
+        description="Directory containing per-tracker rig YAMLs (hawk_rig.yaml, "
+                    "oak_rig.yaml, etc.); the tracker picks its own file from here.",
     )
     camera_arg = DeclareLaunchArgument(
         "camera",
         default_value="zed2i",
-        description="Camera model: zed|zedm|zed2i, hawk, realsensed435, realsensed455 (ZED: /{model}_base/zed_node; RealSense: /realsensed435_base or /realsensed455_base).",
-        choices=["zed", "zedm", "zed2i", "hawk", "realsensed435", "realsensed455"],
-    )
-    base_link_arg = DeclareLaunchArgument(
-        "base_link_frame",
-        default_value="zed_camera_link",
-        description="Child frame for odom TF (odom -> base_link_frame)",
+        description="Camera model id.",
+        choices=["zed", "zedm", "zed2i", "hawk", "oak",
+                 "realsensed435", "realsensed455"],
     )
     odom_topic_arg = DeclareLaunchArgument(
         "odom_topic",
         default_value="/cuvslam/odometry",
         description="Topic to publish odometry on (remapped from /cuvslam/odometry).",
     )
+    enable_plot_arg = DeclareLaunchArgument(
+        "enable_plot",
+        default_value="false",
+        description="Launch odom_diff_logger to plot tracker vs ref.",
+    )
+    ref_odom_topic_arg = DeclareLaunchArgument(
+        "ref_odom_topic",
+        default_value="/Odometry",
+        description="Reference odometry topic for the plot.",
+    )
+    plot_out_path_arg = DeclareLaunchArgument(
+        "plot_out_path",
+        default_value="./outputs/vslam_plot.png",
+        description="Output PNG path for the tracker-vs-ref plot.",
+    )
 
     def launch_vslam(context, *args, **kwargs):
         odom_topic = context.launch_configurations.get("odom_topic", "/cuvslam/odometry")
-        return [
+        tracker_name = context.launch_configurations.get("tracker", "cuvslam")
+        camera_name = context.launch_configurations.get("camera", "zed2i")
+        camera_link = f"{camera_name}_camera_link"
+        enable_plot = context.launch_configurations.get("enable_plot", "false").lower() == "true"
+
+        actions = [
             Node(
                 package="pycuvslam_ros",
                 executable="vslam_node",
@@ -81,14 +91,31 @@ def generate_launch_description():
                         "enable_visualization": LaunchConfiguration("enable_visualization"),
                         "tracker": LaunchConfiguration("tracker"),
                         "camera": LaunchConfiguration("camera"),
-                        "hawk_rig_file": LaunchConfiguration("hawk_rig_file"),
-                        "oak_rig_file": LaunchConfiguration("oak_rig_file"),
-                        "base_link_frame": LaunchConfiguration("base_link_frame"),
+                        "rig_base_path": LaunchConfiguration("rig_base_path"),
+                        "camera_link": camera_link,
                     }
                 ],
                 remappings=[("/cuvslam/odometry", odom_topic)],
             )
         ]
+
+        if enable_plot:
+            actions.append(
+                Node(
+                    package="pycuvslam_ros",
+                    executable="odom_diff_logger",
+                    name="odom_diff_logger",
+                    output="screen",
+                    parameters=[{
+                        "ref_odom_topic": LaunchConfiguration("ref_odom_topic"),
+                        "estimated_odom_topics": odom_topic,
+                        "estimated_labels": tracker_name,
+                        "out_path": LaunchConfiguration("plot_out_path"),
+                        "title": LaunchConfiguration("experiment"),
+                    }],
+                )
+            )
+        return actions
 
     return LaunchDescription(
         [
@@ -97,11 +124,12 @@ def generate_launch_description():
             log_dir_arg,
             enable_viz_arg,
             tracker_arg,
-            hawk_rig_arg,
-            oak_rig_arg,
+            rig_base_path_arg,
             camera_arg,
-            base_link_arg,
             odom_topic_arg,
+            enable_plot_arg,
+            ref_odom_topic_arg,
+            plot_out_path_arg,
             OpaqueFunction(function=launch_vslam),
         ]
     )
