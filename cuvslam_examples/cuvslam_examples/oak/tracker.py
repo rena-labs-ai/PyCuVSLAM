@@ -89,7 +89,7 @@ def _make_oak_raw_camera(k, d, width: int, height: int, rig_from_camera_4x4) -> 
 
 DEFAULT_OAK_RIG_FILE = "oak_rig.yaml"
 
-SLOP_SEC = 0.02
+SLOP_SEC = 0.001
 
 
 def _oak_image_to_compressed_topic(image_topic: str) -> str:
@@ -424,6 +424,7 @@ def _load_rena_oak_cameras():
                     "robot_part": part,
                     "image_mode": cam.get("image_mode", "raw"),
                     "rect_calib": cam.get("rect_calib"),
+                    "rotation": cam.get("rotation"),
                 })
     return out
 
@@ -576,8 +577,23 @@ class RosOakStereoTracker(BaseTracker):
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
         import numpy as np
+        from scipy.spatial.transform import Rotation
 
         if self._rect_cam_info:
+            # rig_from_left is an optional roll/pitch/yaw (deg) from config.yaml,
+            # letting us mount the camera tilted relative to the rig frame.
+            rot_cfg = self._entry.get("rotation") or {}
+            rpy_deg = [
+                float(rot_cfg.get("roll", 0.0)),
+                float(rot_cfg.get("pitch", 0.0)),
+                float(rot_cfg.get("yaw", 0.0)),
+            ]
+            rig_from_left = np.eye(4)
+            rig_from_left[:3, :3] = Rotation.from_euler(
+                "xyz", rpy_deg, degrees=True
+            ).as_matrix()
+            print(f"[ros_oak_stereo] rect rig_from_left rpy(deg)={rpy_deg}")
+
             calib = camera_params["calib"]
             # Both cameras share the rectified virtual K; no distortion; right
             # is offset by baseline along +X (no rotation, coplanar after rect).
@@ -587,7 +603,6 @@ class RosOakStereoTracker(BaseTracker):
                 cam.principal = (calib["cx"], calib["cy"])
                 cam.size = (calib["width"], calib["height"])
                 cam.distortion = vslam.Distortion(vslam.Distortion.Model.Pinhole)
-                from scipy.spatial.transform import Rotation
                 m = np.asarray(rig_from_cam_4x4, dtype=np.float64)
                 cam.rig_from_camera = vslam.Pose(
                     rotation=Rotation.from_matrix(m[:3, :3]).as_quat(),
@@ -598,9 +613,10 @@ class RosOakStereoTracker(BaseTracker):
             right_pose = np.eye(4)
             right_pose[0, 3] = calib["baseline_m"]
             rig = vslam.Rig()
-            rig.cameras = [_mk(np.eye(4)), _mk(right_pose)]
+            rig.cameras = [_mk(rig_from_left), _mk(rig_from_left @ right_pose)]
             return rig
 
+        # Raw mode: left is the rig origin; rotation is not supported here.
         left_msg = camera_params["left_msg"]
         right_msg = camera_params["right_msg"]
         right_in_left = camera_params["right_in_left"]
@@ -608,7 +624,7 @@ class RosOakStereoTracker(BaseTracker):
         left_cam = _make_oak_raw_camera(
             k=left_msg.k, d=left_msg.d,
             width=left_msg.width, height=left_msg.height,
-            rig_from_camera_4x4=np.eye(4),  # left is the rig origin
+            rig_from_camera_4x4=np.eye(4),
         )
         right_cam = _make_oak_raw_camera(
             k=right_msg.k, d=right_msg.d,

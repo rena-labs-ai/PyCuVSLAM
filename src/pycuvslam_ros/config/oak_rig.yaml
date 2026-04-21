@@ -8,7 +8,7 @@
 # Transforms are rig_from_camera (3x4 or 4x4 pose of the camera in the rig frame).
 
 stereo_cameras:
-  - serial_no: "1944301071E8975A00"
+  - serial_no: "1944301081EC985A00"   # front OAK
     left_camera:
       transform:              # identity rotation, offset half-baseline along -X
         - [1, 0, 0, -0.0375]
@@ -20,14 +20,14 @@ stereo_cameras:
         - [0, 1, 0, 0.0]
         - [0, 0, 1, 0.0]
 
-  - serial_no: "1944301081EC985A00"
-    left_camera:
-      transform:
-        - [-1, 0,  0,  0.0375]
-        - [ 0, 1,  0,  0.0]
-        - [ 0, 0, -1,  0.25]
-    right_camera:
-      transform:
-        - [-1, 0,  0, -0.0375]
-        - [ 0, 1,  0,  0.0]
-        - [ 0, 0, -1,  0.25]
+  # - serial_no: "1944301071E8975A00"   # back OAK (currently disconnected)
+  #   left_camera:
+  #     transform:
+  #       - [-1, 0,  0,  0.0375]
+  #       - [ 0, 1,  0,  0.0]
+  #       - [ 0, 0, -1,  0.25]
+  #   right_camera:
+  #     transform:
+  #       - [-1, 0,  0, -0.0375]
+  #       - [ 0, 1,  0,  0.0]
+  #       - [ 0, 0, -1,  0.25]

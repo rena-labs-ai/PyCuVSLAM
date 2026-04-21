@@ -13,6 +13,7 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import (
     Point,
@@ -177,12 +178,24 @@ def main() -> None:
 
     camera_link = str(camera_link_param.value) or f"{camera_model}_camera_link"
 
+    # TRANSIENT_LOCAL on /tf so late subscribers (e.g. nvblox launched after
+    # us) immediately receive the most recent transform instead of waiting for
+    # the next 30 Hz tick. The default tf2_ros broadcaster uses VOLATILE, which
+    # drops all history for late joiners and leads to race-condition frame
+    # drops on the subscriber side.
+    _tf_qos = QoSProfile(
+        depth=100,
+        history=HistoryPolicy.KEEP_LAST,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    )
+
     class VslamNode(Node):
         def __init__(self, child_frame: str) -> None:
             super().__init__("vslam")
             self._child_frame = child_frame
             self._odom_pub = self.create_publisher(Odometry, ODOM_TOPIC, 10)
-            self._tf_broadcaster = TransformBroadcaster(self)
+            self._tf_broadcaster = TransformBroadcaster(self, qos=_tf_qos)
             self._static_tf_broadcaster = StaticTransformBroadcaster(self)
             self._pipeline = Pipeline(tracker, enable_visualization=enable_viz)
             self._pipeline.start()
