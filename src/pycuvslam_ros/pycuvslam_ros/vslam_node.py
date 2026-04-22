@@ -3,7 +3,7 @@
 Supports RosMulticamTracker, RosZedStereoTracker, RosZedVIOTracker,
 RosRealSenseStereoTracker, RosHawkStereoTracker, and RosHawkMulticamTracker.
 Stereo image topics are derived from parameter camera (model id).
-Publishes TF: map->odom (identity), odom->camera_link (from odometry).
+Publishes TF: map->odom (identity), odom->camera_mount_link (from odometry).
 """
 
 import subprocess
@@ -31,7 +31,7 @@ from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
-from cuvslam_examples.oak.tracker import RosOakMulticamTracker, RosOakStereoTracker
+from cuvslam_examples.oak.tracker import RosOakStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -85,7 +85,7 @@ def main() -> None:
     camera_model = str(camera_param.value)
 
     # Per-tracker rig file lives at {rig_base_path}/<model>_rig.yaml
-    # (e.g. hawk_rig.yaml, oak_rig.yaml).
+    # (e.g. hawk_rig.yaml).
     def _rig_file(model: str) -> str:
         if not rig_base_path:
             return ""
@@ -102,13 +102,6 @@ def main() -> None:
     if tracker_type == "ros_hawk_multicam" and not _rig_file("hawk"):
         param_node.get_logger().error(
             "rig_base_path must be set for ros_hawk_multicam (expects <path>/hawk_rig.yaml)"
-        )
-        param_node.destroy_node()
-        rclpy.shutdown()
-        return
-    if tracker_type == "ros_oak_multicam" and not _rig_file("oak"):
-        param_node.get_logger().error(
-            "rig_base_path must be set for ros_oak_multicam (expects <path>/oak_rig.yaml)"
         )
         param_node.destroy_node()
         rclpy.shutdown()
@@ -154,8 +147,6 @@ def main() -> None:
             tracker = RosHawkMulticamTracker(rig_file=_rig_file("hawk"))
         case "ros_oak_stereo":
             tracker = RosOakStereoTracker()
-        case "ros_oak_multicam":
-            tracker = RosOakMulticamTracker(rig_file=_rig_file("oak"))
         case "ros_zed_stereo":
             tracker = RosZedStereoTracker(left_topic=zed_left, right_topic=zed_right)
         case "ros_zed_vio":
@@ -176,7 +167,7 @@ def main() -> None:
         case _:
             raise ValueError(f"Unknown tracker type: {tracker_type}")
 
-    camera_link = str(camera_link_param.value) or f"{camera_model}_camera_link"
+    camera_link = str(camera_link_param.value) or "camera_mount_link"
 
     # TRANSIENT_LOCAL on /tf so late subscribers (e.g. nvblox launched after
     # us) immediately receive the most recent transform instead of waiting for

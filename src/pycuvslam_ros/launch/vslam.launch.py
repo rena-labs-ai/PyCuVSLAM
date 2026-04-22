@@ -1,5 +1,6 @@
 """Launch file for vslam. Assumes cameras are already running."""
 
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -42,7 +43,7 @@ def generate_launch_description():
         "rig_base_path",
         default_value=default_rig_base,
         description="Directory containing per-tracker rig YAMLs (hawk_rig.yaml, "
-                    "oak_rig.yaml, etc.); the tracker picks its own file from here.",
+                    "etc.); the tracker picks its own file from here.",
     )
     camera_arg = DeclareLaunchArgument(
         "camera",
@@ -71,13 +72,19 @@ def generate_launch_description():
         default_value="./outputs/vslam_plot.png",
         description="Output PNG path for the tracker-vs-ref plot.",
     )
+    oak_tilt_deg_arg = DeclareLaunchArgument(
+        "oak_tilt_deg",
+        default_value="-24.0",
+        description="Camera tilt around world Y (deg) for oak rect mode; "
+                    "applied as static TF camera_mount_link -> oak_camera_link.",
+    )
 
     def launch_vslam(context, *args, **kwargs):
         odom_topic = context.launch_configurations.get("odom_topic", "/cuvslam/odometry")
         tracker_name = context.launch_configurations.get("tracker", "cuvslam")
         camera_name = context.launch_configurations.get("camera", "zed2i")
-        camera_link = f"{camera_name}_camera_link"
         enable_plot = context.launch_configurations.get("enable_plot", "false").lower() == "true"
+        oak_tilt_deg = float(context.launch_configurations.get("oak_tilt_deg", "-24.0"))
 
         actions = [
             Node(
@@ -92,12 +99,30 @@ def generate_launch_description():
                         "tracker": LaunchConfiguration("tracker"),
                         "camera": LaunchConfiguration("camera"),
                         "rig_base_path": LaunchConfiguration("rig_base_path"),
-                        "camera_link": camera_link,
+                        "camera_link": "camera_mount_link",
                     }
                 ],
                 remappings=[("/cuvslam/odometry", odom_topic)],
             )
         ]
+
+        if camera_name == "oak":
+            half = math.radians(oak_tilt_deg / 2.0)
+            actions.append(Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="camera_mount_to_oak_camera_link",
+                arguments=[
+                    "--x", "0", "--y", "0", "--z", "0",
+                    "--qx", "0",
+                    "--qy", str(math.sin(half)),
+                    "--qz", "0",
+                    "--qw", str(math.cos(half)),
+                    "--frame-id", "camera_mount_link",
+                    "--child-frame-id", "oak_camera_link",
+                ],
+                output="screen",
+            ))
 
         if enable_plot:
             actions.append(
@@ -130,6 +155,7 @@ def generate_launch_description():
             enable_plot_arg,
             ref_odom_topic_arg,
             plot_out_path_arg,
+            oak_tilt_deg_arg,
             OpaqueFunction(function=launch_vslam),
         ]
     )
