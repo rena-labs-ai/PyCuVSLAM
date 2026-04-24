@@ -306,7 +306,7 @@ class RosOakStereoTracker(BaseTracker):
         )
 
     def create_slam_config(self) -> vslam.Tracker.SlamConfig:
-        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=False)
+        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
         import numpy as np

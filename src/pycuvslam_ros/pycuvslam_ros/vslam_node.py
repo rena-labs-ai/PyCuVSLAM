@@ -1,9 +1,11 @@
 """ROS2 node that runs cuVSLAM and publishes odometry to /cuvslam/odometry.
 
 Supports RosMulticamTracker, RosZedStereoTracker, RosZedVIOTracker,
-RosRealSenseStereoTracker, RosHawkStereoTracker, and RosHawkMulticamTracker.
+RosRealSenseStereoTracker, RosHawkStereoTracker, and RosOakStereoTracker.
 Stereo image topics are derived from parameter camera (model id).
-Publishes TF: map->odom (identity), odom->camera_mount_link (from odometry).
+
+Publishes only Odometry (no TF). Stamps match the tracker pipeline timestamp
+(e.g. OAK: synced left IR header time from ApproximateTimeSynchronizer).
 """
 
 import subprocess
@@ -13,19 +15,15 @@ import yaml
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import (
     Point,
     Pose,
     PoseWithCovariance,
     Quaternion,
-    TransformStamped,
     TwistWithCovariance,
-    Vector3,
 )
 from nav_msgs.msg import Odometry
-from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
@@ -35,7 +33,6 @@ from cuvslam_examples.oak.tracker import RosOakStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
-MAP_FRAME = "map"
 
 # Default ROS topic namespace (prefix) per RealSense camera model.
 _REALSENSE_TOPIC_BASE_DEFAULT = {
@@ -77,12 +74,13 @@ def main() -> None:
     tracker_param = param_node.declare_parameter("tracker", "ros_multicam")
     camera_param = param_node.declare_parameter("camera", "zed2i")
     rig_base_path_param = param_node.declare_parameter("rig_base_path", "")
-    camera_link_param = param_node.declare_parameter("camera_link", "")
+    odom_child_frame_param = param_node.declare_parameter("odom_child_frame", "nav_base_link")
 
     config_file = config_file_param.value
     tracker_type = str(tracker_param.value)
     rig_base_path = str(rig_base_path_param.value)
     camera_model = str(camera_param.value)
+    odom_child_frame = str(odom_child_frame_param.value)
 
     # Per-tracker rig file lives at {rig_base_path}/<model>_rig.yaml
     # (e.g. hawk_rig.yaml).
@@ -167,41 +165,17 @@ def main() -> None:
         case _:
             raise ValueError(f"Unknown tracker type: {tracker_type}")
 
-    camera_link = str(camera_link_param.value) or "camera_mount_link"
-
-    # TRANSIENT_LOCAL on /tf so late subscribers (e.g. nvblox launched after
-    # us) immediately receive the most recent transform instead of waiting for
-    # the next 30 Hz tick. The default tf2_ros broadcaster uses VOLATILE, which
-    # drops all history for late joiners and leads to race-condition frame
-    # drops on the subscriber side.
-    _tf_qos = QoSProfile(
-        depth=100,
-        history=HistoryPolicy.KEEP_LAST,
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-    )
-
     class VslamNode(Node):
         def __init__(self, child_frame: str) -> None:
             super().__init__("vslam")
             self._child_frame = child_frame
             self._odom_pub = self.create_publisher(Odometry, ODOM_TOPIC, 10)
-            self._tf_broadcaster = TransformBroadcaster(self, qos=_tf_qos)
-            self._static_tf_broadcaster = StaticTransformBroadcaster(self)
             self._pipeline = Pipeline(tracker, enable_visualization=enable_viz)
             self._pipeline.start()
 
-            # map -> odom: identity (no localization yet)
-            static_tf = TransformStamped()
-            static_tf.header.stamp = self.get_clock().now().to_msg()
-            static_tf.header.frame_id = MAP_FRAME
-            static_tf.child_frame_id = ODOM_FRAME
-            static_tf.transform.translation = Vector3(x=0.0, y=0.0, z=0.0)
-            static_tf.transform.rotation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-            self._static_tf_broadcaster.sendTransform(static_tf)
-
             self.get_logger().info(
-                f"Publishing odometry on {ODOM_TOPIC}, TF odom->{child_frame}"
+                f"Publishing odometry only on {ODOM_TOPIC} "
+                f"(child_frame={child_frame}, no TF)"
             )
             self._thread = threading.Thread(target=self._tracking_loop, daemon=True)
             self._thread.start()
@@ -231,24 +205,11 @@ def main() -> None:
                 msg.twist = TwistWithCovariance()
                 self._odom_pub.publish(msg)
 
-                # odom -> camera_link
-                tf = TransformStamped()
-                tf.header.stamp = stamp
-                tf.header.frame_id = ODOM_FRAME
-                tf.child_frame_id = self._child_frame
-                tf.transform.translation = Vector3(
-                    x=float(t[0]), y=float(t[1]), z=float(t[2])
-                )
-                tf.transform.rotation = Quaternion(
-                    x=float(r[0]), y=float(r[1]), z=float(r[2]), w=float(r[3])
-                )
-                self._tf_broadcaster.sendTransform(tf)
-
         def destroy_node(self) -> None:
             self._pipeline.stop()
             super().destroy_node()
 
-    node = VslamNode(child_frame=camera_link)
+    node = VslamNode(child_frame=odom_child_frame)
     try:
         while rclpy.ok():
             time.sleep(0.1)

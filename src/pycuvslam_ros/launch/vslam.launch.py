@@ -78,6 +78,11 @@ def generate_launch_description():
         description="Camera tilt around world Y (deg) for oak rect mode; "
                     "applied as static TF camera_mount_link -> oak_camera_link.",
     )
+    odom_child_frame_arg = DeclareLaunchArgument(
+        "odom_child_frame",
+        default_value="nav_base_link",
+        description="Odometry child_frame_id; match cuvslam_sync_nav_base_link (default nav_base_link).",
+    )
 
     def launch_vslam(context, *args, **kwargs):
         odom_topic = context.launch_configurations.get("odom_topic", "/cuvslam/odometry")
@@ -99,30 +104,31 @@ def generate_launch_description():
                         "tracker": LaunchConfiguration("tracker"),
                         "camera": LaunchConfiguration("camera"),
                         "rig_base_path": LaunchConfiguration("rig_base_path"),
-                        "camera_link": "camera_mount_link",
+                        "odom_child_frame": LaunchConfiguration("odom_child_frame"),
                     }
                 ],
                 remappings=[("/cuvslam/odometry", odom_topic)],
             )
         ]
 
-        if camera_name == "oak":
-            half = math.radians(oak_tilt_deg / 2.0)
-            actions.append(Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                name="camera_mount_to_oak_camera_link",
-                arguments=[
-                    "--x", "0", "--y", "0", "--z", "0",
-                    "--qx", "0",
-                    "--qy", str(math.sin(half)),
-                    "--qz", "0",
-                    "--qw", str(math.cos(half)),
-                    "--frame-id", "camera_mount_link",
-                    "--child-frame-id", "oak_camera_link",
-                ],
-                output="screen",
-            ))
+        # If camera tilted, for nvblox to know about the tilt
+        # if camera_name == "oak":
+        #     half = math.radians(oak_tilt_deg / 2.0)
+        #     actions.append(Node(
+        #         package="tf2_ros",
+        #         executable="static_transform_publisher",
+        #         name="camera_mount_to_oak_camera_link",
+        #         arguments=[
+        #             "--x", "0", "--y", "0", "--z", "0",
+        #             "--qx", "0",
+        #             "--qy", str(math.sin(half)),
+        #             "--qz", "0",
+        #             "--qw", str(math.cos(half)),
+        #             "--frame-id", "camera_mount_link",
+        #             "--child-frame-id", "oak_camera_link",
+        #         ],
+        #         output="screen",
+        #     ))
 
         if enable_plot:
             actions.append(
@@ -156,6 +162,7 @@ def generate_launch_description():
             ref_odom_topic_arg,
             plot_out_path_arg,
             oak_tilt_deg_arg,
+            odom_child_frame_arg,
             OpaqueFunction(function=launch_vslam),
         ]
     )
