@@ -12,6 +12,7 @@ from cuvslam_examples.realsense import TrackingResult
 from cuvslam_examples.realsense.tracker import (
     BaseTracker,
     _CameraInfoCollector,
+    _decode_compressed_depth,
     _spin_ros_node,
 )
 from cuvslam_examples.realsense.utils import Landmark, Pose
@@ -116,10 +117,6 @@ def _decode_oak_compressed_image(msg) -> "np.ndarray | None":
     return np.ascontiguousarray(img) if img is not None else None
 
 
-DEFAULT_OAK_LEFT_TOPIC = "/oak_base_front/left/image_raw"
-DEFAULT_OAK_RIGHT_TOPIC = "/oak_base_front/right/image_raw"
-
-
 def _load_rena_oak_cameras():
     """Scan rena_bringup/config/config.yaml for all OAK cameras across all
     robots, return a flat list of dicts:
@@ -170,7 +167,7 @@ def _oak_topics_for_entry(entry: dict) -> tuple[str, str]:
     image_mode to pick the image_raw / image_rect suffix."""
     suffix = f"image_{entry['image_mode']}"  # image_raw or image_rect
     ns = f"/oak_{entry['robot_part']}_{entry['key']}"
-    return f"{ns}/left/{suffix}", f"{ns}/right/{suffix}"
+    return f"{ns}/dot_off/left/{suffix}", f"{ns}/dot_off/right/{suffix}"
 
 
 class RosOakStereoTracker(BaseTracker):
@@ -363,6 +360,9 @@ class RosOakStereoTracker(BaseTracker):
                     rig_from_camera_4x4=rig_from_right,
                 ))
 
+        # for cam in cameras:
+        #     cam.border_bottom = cam.size[1] // 4
+
         rig = vslam.Rig()
         rig.cameras = cameras
         return rig
@@ -457,6 +457,208 @@ class RosOakStereoTracker(BaseTracker):
         print(
             f"[ros_oak_stereo] Subscribed (ApproximateTimeSynchronizer "
             f"slop={SLOP_SEC*1000:.0f}ms): " + ", ".join(topics_log),
+            flush=True,
+        )
+
+        self._spin_thread = threading.Thread(
+            target=_spin_ros_node, args=(self._node, self), daemon=True
+        )
+        self._spin_thread.start()
+
+    def stop_streaming(self) -> None:
+        self._running = False
+        if hasattr(self, "_spin_thread"):
+            self._spin_thread.join(timeout=2.0)
+        if hasattr(self, "_node"):
+            self._node.destroy_node()
+
+
+class RosOakRGBDTracker(BaseTracker):
+    """Single-OAK RGBD tracker (compressed RGB + compressedDepth).
+
+    Topic convention (depthai_ros_driver_v3, oak_rect rgbd pipeline):
+      color: /oak_<part>_<key>/rgb/image_raw/compressed
+      depth: /oak_<part>_<key>/stereo/image_raw/compressedDepth
+
+    Requires exactly one OAK in rena_bringup config.yaml; raises otherwise.
+    Depth is uint16 millimeters by default (depth_scale=0.001).
+    """
+
+    def __init__(self, depth_scale: float = 0.001) -> None:
+        oaks = _load_rena_oak_cameras()
+        if len(oaks) != 1:
+            raise RuntimeError(
+                f"RosOakRGBDTracker requires exactly 1 OAK in config.yaml, "
+                f"found {len(oaks)}: {[o['serial_no'] for o in oaks]}"
+            )
+        self._entry = oaks[0]
+        ns = f"/oak_{self._entry['robot_part']}_{self._entry['key']}"
+        self._color_image_topic = f"{ns}/rgb/image_raw"
+        self._depth_image_topic = f"{ns}/stereo/image_raw"
+        self._color_topic = f"{self._color_image_topic}/compressed"
+        self._depth_topic = f"{self._depth_image_topic}/compressedDepth"
+        self._depth_scale = depth_scale
+        self._running = False
+
+        print(
+            f"[ros_oak_rgbd] serial={self._entry['serial_no']} "
+            f"{self._entry['robot_part']}/{self._entry['key']}\n"
+            f"  color: {self._color_topic}\n"
+            f"  depth: {self._depth_topic}"
+        )
+
+    def setup_camera_parameters(self) -> Dict[str, Dict]:
+        import rclpy
+        from rclpy.node import Node
+        from sensor_msgs.msg import CameraInfo
+
+        color_info_topic = _oak_image_to_raw_camera_info_topic(self._color_image_topic)
+        print(f"[ros_oak_rgbd] Waiting for CameraInfo on {color_info_topic} ...")
+
+        collector = _CameraInfoCollector(["color"])
+        node = Node("ros_oak_rgbd_camera_info")
+        node.create_subscription(
+            CameraInfo, color_info_topic, partial(collector.on_info, "color"), 10
+        )
+
+        deadline = time.time() + 30.0
+        while not collector.has_all() and time.time() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.5)
+        node.destroy_node()
+
+        if collector.received["color"] is None:
+            raise TimeoutError(
+                f"Did not receive CameraInfo on {color_info_topic} within 30 s"
+            )
+        print("[ros_oak_rgbd] CameraInfo received")
+        return {"color_msg": collector.received["color"]}
+
+    def create_odometry_config(self) -> vslam.Tracker.OdometryConfig:
+        rgbd_settings = vslam.Tracker.OdometryRGBDSettings()
+        rgbd_settings.depth_scale_factor = 1.0 / self._depth_scale
+        rgbd_settings.depth_camera_id = 0
+        rgbd_settings.enable_depth_stereo_tracking = False
+
+        return vslam.Tracker.OdometryConfig(
+            async_sba=True,
+            enable_final_landmarks_export=True,
+            odometry_mode=vslam.Tracker.OdometryMode.RGBD,
+            rgbd_settings=rgbd_settings,
+            rectified_stereo_camera=False,
+        )
+
+    def create_slam_config(self) -> vslam.Tracker.SlamConfig:
+        return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
+
+    def create_rig(self, camera_params: dict) -> vslam.Rig:
+        rig_cfg = self._entry.get("rig") or {}
+        rig_from_color = _rig_from_camera_from_robot_pose(
+            rig_cfg.get("rotation"),
+            rig_cfg.get("translation"),
+        )
+        print(
+            f"[ros_oak_rgbd] {self._entry['robot_part']}/{self._entry['key']}: "
+            f"rig_from_color t={rig_from_color[:3, 3].tolist()}"
+        )
+
+        msg = camera_params["color_msg"]
+        cam = _make_oak_raw_camera(
+            k=msg.k, d=msg.d,
+            width=msg.width, height=msg.height,
+            rig_from_camera_4x4=rig_from_color,
+        )
+
+        rig = vslam.Rig()
+        rig.cameras = [cam]
+        return rig
+
+    def start_streaming(
+        self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
+    ) -> None:
+        import message_filters
+        from sensor_msgs.msg import CompressedImage
+        from rclpy.node import Node
+        from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+
+        self._running = True
+
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        frames_fed = [0]
+        last_log_time = [time.monotonic()]
+        last_ts = [0]
+
+        def on_rgbd_pair(color_msg, depth_msg):
+            ts = (
+                color_msg.header.stamp.sec * 1_000_000_000
+                + color_msg.header.stamp.nanosec
+            )
+            if ts <= last_ts[0]:
+                return
+            last_ts[0] = ts
+
+            color = _decode_oak_compressed_image(color_msg)
+            if color is None:
+                print("[ros_oak_rgbd] Warning: color decode failed", flush=True)
+                return
+            depth = _decode_compressed_depth(bytes(depth_msg.data))
+            if depth is None:
+                print("[ros_oak_rgbd] Warning: depth decode failed", flush=True)
+                return
+
+            t0 = time.monotonic()
+            vo_pose_estimate, slam_pose = tracker.track(
+                ts, images=[color], depths=[depth]
+            )
+            track_ms = (time.monotonic() - t0) * 1000
+
+            if vo_pose_estimate.world_from_rig is None or slam_pose is None:
+                print("[ros_oak_rgbd] Warning: track failed", flush=True)
+                return
+
+            frames_fed[0] += 1
+            now = time.monotonic()
+            if now - last_log_time[0] >= 1.0:
+                print(
+                    f"[ros_oak_rgbd] fed={frames_fed[0]}/s  track={track_ms:.1f}ms",
+                    flush=True,
+                )
+                frames_fed[0] = 0
+                last_log_time[0] = now
+
+            landmarks = [
+                Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
+            ]
+            output_queue.put(
+                TrackingResult(
+                    ts,
+                    Pose(vo_pose_estimate.world_from_rig.pose),
+                    Pose(slam_pose),
+                    (color, depth),
+                    landmarks,
+                )
+            )
+
+        self._node = Node("ros_oak_rgbd_frames")
+        color_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._color_topic, qos_profile=qos
+        )
+        depth_sub = message_filters.Subscriber(
+            self._node, CompressedImage, self._depth_topic, qos_profile=qos
+        )
+        self._sync = message_filters.ApproximateTimeSynchronizer(
+            [color_sub, depth_sub], queue_size=10, slop=SLOP_SEC
+        )
+        self._sync.registerCallback(on_rgbd_pair)
+
+        print(
+            f"[ros_oak_rgbd] Subscribed (ApproximateTimeSynchronizer "
+            f"slop={SLOP_SEC*1000:.0f}ms): "
+            f"{self._color_topic}, {self._depth_topic}",
             flush=True,
         )
 

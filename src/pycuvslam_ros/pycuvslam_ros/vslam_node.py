@@ -29,7 +29,7 @@ from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
 from cuvslam_examples.zed.tracker import RosZedStereoTracker, RosZedVIOTracker
 from cuvslam_examples.hawk.tracker import RosHawkMulticamTracker, RosHawkStereoTracker
-from cuvslam_examples.oak.tracker import RosOakStereoTracker
+from cuvslam_examples.oak.tracker import RosOakRGBDTracker, RosOakStereoTracker
 
 ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
@@ -145,6 +145,8 @@ def main() -> None:
             tracker = RosHawkMulticamTracker(rig_file=_rig_file("hawk"))
         case "ros_oak_stereo":
             tracker = RosOakStereoTracker()
+        case "ros_oak_rgbd":
+            tracker = RosOakRGBDTracker()
         case "ros_zed_stereo":
             tracker = RosZedStereoTracker(left_topic=zed_left, right_topic=zed_right)
         case "ros_zed_vio":
