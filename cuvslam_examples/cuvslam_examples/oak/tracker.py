@@ -122,7 +122,7 @@ def _load_rena_oak_cameras():
     robots, return a flat list of dicts:
 
         [{"serial_no": str, "key": str, "robot_part": "base"|"arm",
-          "image_mode": "raw"|"rect", "rect_calib": dict|None}, ...]
+          "image_mode": "raw"|"rect"|"alternate", "rect_calib": dict|None}, ...]
 
     OAK serial numbers are globally unique across devices, so scanning all
     robots in the file is safe. Pycuvslam runs on a specific robot but doesn't
@@ -162,10 +162,22 @@ def _load_rena_oak_cameras():
     return out
 
 
+def _oak_image_topic_suffix(image_mode: str) -> str:
+    """Map config image_mode to ROS topic segment (image_raw vs image_rect)."""
+    if image_mode in ("raw", "alternate"):
+        return "raw"
+    if image_mode == "rect":
+        return "rect"
+    raise ValueError(
+        f"unsupported OAK image_mode {image_mode!r}; "
+        "expected 'raw', 'rect', or 'alternate'"
+    )
+
+
 def _oak_topics_for_entry(entry: dict) -> tuple[str, str]:
     """Return (left_topic, right_topic) for a config.yaml OAK entry, using its
     image_mode to pick the image_raw / image_rect suffix."""
-    suffix = f"image_{entry['image_mode']}"  # image_raw or image_rect
+    suffix = f"image_{_oak_image_topic_suffix(entry['image_mode'])}"
     ns = f"/oak_{entry['robot_part']}_{entry['key']}"
     return f"{ns}/dot_off/left/{suffix}", f"{ns}/dot_off/right/{suffix}"
 
@@ -192,15 +204,19 @@ class RosOakStereoTracker(BaseTracker):
             )
 
         # cuVSLAM's rectified_stereo_camera is a rig-wide flag; all OAKs must
-        # agree on image_mode.
+        # agree on raw vs rect streams (raw and alternate both use image_raw).
         modes = {o["image_mode"] for o in oaks}
-        if len(modes) > 1:
+        try:
+            kinds = {_oak_image_topic_suffix(m) for m in modes}
+        except ValueError as e:
+            raise RuntimeError(f"RosOakStereoTracker: {e}") from e
+        if len(kinds) > 1:
             raise RuntimeError(
                 f"RosOakStereoTracker: mixed image_mode across OAKs ({sorted(modes)}). "
                 "cuVSLAM requires all cameras to share one rectified_stereo_camera "
                 "setting — make every OAK's image_mode match."
             )
-        self._rect_cam_info = modes.pop() == "rect"
+        self._rect_cam_info = kinds == {"rect"}
         self._entries = oaks
         for e in self._entries:
             left_topic, right_topic = _oak_topics_for_entry(e)
