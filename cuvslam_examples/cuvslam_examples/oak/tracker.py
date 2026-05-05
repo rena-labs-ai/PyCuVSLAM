@@ -52,7 +52,7 @@ def _make_oak_raw_camera(k, d, width: int, height: int, rig_from_camera_4x4) -> 
     )
     return cam
 
-SLOP_SEC = 0.001
+SLOP_SEC = 0.033
 
 
 # Rotation that maps robot body axes (x-fwd, y-left, z-up) into cuVSLAM
@@ -117,6 +117,37 @@ def _decode_oak_compressed_image(msg) -> "np.ndarray | None":
     return np.ascontiguousarray(img) if img is not None else None
 
 
+def _decode_oak_raw_color(msg) -> "np.ndarray | None":
+    """Decode a sensor_msgs/Image color frame from the depthai driver into a
+    grayscale numpy array (cuvslam features are luma-only)."""
+    import cv2
+    import numpy as np
+
+    h, w = int(msg.height), int(msg.width)
+    enc = (msg.encoding or "").lower()
+    buf = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+    if enc in ("mono8", "8uc1"):
+        return np.ascontiguousarray(buf.reshape(h, w))
+    if enc in ("rgb8", "bgr8"):
+        img = buf.reshape(h, w, 3)
+        code = cv2.COLOR_RGB2GRAY if enc == "rgb8" else cv2.COLOR_BGR2GRAY
+        return np.ascontiguousarray(cv2.cvtColor(img, code))
+    return None
+
+
+def _decode_oak_raw_depth(msg) -> "np.ndarray | None":
+    """Decode a sensor_msgs/Image uint16 depth frame (16UC1 / mono16)."""
+    import numpy as np
+
+    h, w = int(msg.height), int(msg.width)
+    enc = (msg.encoding or "").lower()
+    if enc not in ("16uc1", "mono16"):
+        return None
+    return np.ascontiguousarray(
+        np.frombuffer(bytes(msg.data), dtype=np.uint16).reshape(h, w)
+    )
+
+
 def _load_rena_oak_cameras():
     """Scan rena_bringup/config/config.yaml for all OAK cameras across all
     robots, return a flat list of dicts:
@@ -158,6 +189,7 @@ def _load_rena_oak_cameras():
                     "image_mode": cam.get("image_mode", "raw"),
                     "rect_calib": cam.get("rect_calib"),
                     "rig": cam.get("rig"),
+                    "stereo_extrinsic": cam.get("stereo_extrinsic"),
                 })
     return out
 
@@ -179,7 +211,8 @@ def _oak_topics_for_entry(entry: dict) -> tuple[str, str]:
     image_mode to pick the image_raw / image_rect suffix."""
     suffix = f"image_{_oak_image_topic_suffix(entry['image_mode'])}"
     ns = f"/oak_{entry['robot_part']}_{entry['key']}"
-    return f"{ns}/dot_off/left/{suffix}", f"{ns}/dot_off/right/{suffix}"
+    # return f"{ns}/dot_off/left/{suffix}", f"{ns}/dot_off/right/{suffix}"
+    return f"{ns}/left/{suffix}", f"{ns}/right/{suffix}"
 
 
 class RosOakStereoTracker(BaseTracker):
@@ -351,30 +384,102 @@ class RosOakStereoTracker(BaseTracker):
                 f"rig_from_left t={rig_from_left[:3, 3].tolist()}"
             )
 
-            # Baseline always comes from rect_calib — in both raw and rect mode
-            # we trust the factory stereo calibration over /tf.
+            # rig_from_right = rig_from_left @ left_from_right.
+            #
+            # In rect mode: rectified stereo guarantees parallel optical axes,
+            # so left_from_right is just a +x baseline shim (rect_calib.baseline_m).
+            #
+            # In raw mode: cuVSLAM does its own triangulation from the raw
+            # frames and needs the *true* L<->R rigid transform — small (~1deg)
+            # rotation + (ty, tz) offsets are physically present and ignoring
+            # them gives wrong-depth landmarks and short trajectories. Use
+            # entry['stereo_extrinsic'] (right_from_left, factory) when given.
             baseline_m = entry["rect_calib"]["baseline_m"]
-            baseline = np.eye(4)
-            baseline[0, 3] = baseline_m
-            rig_from_right = rig_from_left @ baseline
+            stereo_ext = entry.get("stereo_extrinsic")
+            if self._rect_cam_info or stereo_ext is None:
+                if not self._rect_cam_info:
+                    print(
+                        f"[ros_oak_stereo] WARN {entry['robot_part']}/"
+                        f"{entry['key']}: raw mode without stereo_extrinsic; "
+                        "falling back to +x baseline shim — tracking will drift."
+                    )
+                left_from_right = np.eye(4)
+                left_from_right[0, 3] = baseline_m
+            else:
+                ext_t = np.asarray(stereo_ext["translation"], dtype=np.float64)
+                ext_q = np.asarray(stereo_ext["rotation"], dtype=np.float64)
+                if ext_t.shape != (3,) or ext_q.shape != (4,):
+                    raise ValueError(
+                        f"stereo_extrinsic for {entry['serial_no']} must have "
+                        "translation (3) and rotation (4 = qx,qy,qz,qw)"
+                    )
+                right_from_left = np.eye(4)
+                right_from_left[:3, :3] = Rotation.from_quat(ext_q).as_matrix()
+                right_from_left[:3, 3] = ext_t
+                left_from_right = np.linalg.inv(right_from_left)
+            rig_from_right = rig_from_left @ left_from_right
 
             if self._rect_cam_info:
                 calib = p["calib"]
-                cameras.append(_mk_rect(calib, rig_from_left))
-                cameras.append(_mk_rect(calib, rig_from_right))
+                cam_left = _mk_rect(calib, rig_from_left)
+                cam_right = _mk_rect(calib, rig_from_right)
+                k_left = [calib["fx"], 0, calib["cx"],
+                          0, calib["fy"], calib["cy"], 0, 0, 1]
+                k_right = list(k_left)
+                d_left = [0.0] * 8
+                d_right = [0.0] * 8
             else:
                 left_msg = p["left_msg"]
                 right_msg = p["right_msg"]
-                cameras.append(_make_oak_raw_camera(
+                cam_left = _make_oak_raw_camera(
                     k=left_msg.k, d=left_msg.d,
                     width=left_msg.width, height=left_msg.height,
                     rig_from_camera_4x4=rig_from_left,
-                ))
-                cameras.append(_make_oak_raw_camera(
+                )
+                cam_right = _make_oak_raw_camera(
                     k=right_msg.k, d=right_msg.d,
                     width=right_msg.width, height=right_msg.height,
                     rig_from_camera_4x4=rig_from_right,
-                ))
+                )
+                k_left = list(left_msg.k)
+                k_right = list(right_msg.k)
+                d_left = [float(left_msg.d[i]) if i < len(left_msg.d) else 0.0
+                          for i in range(8)]
+                d_right = [float(right_msg.d[i]) if i < len(right_msg.d) else 0.0
+                           for i in range(8)]
+
+            cameras.append(cam_left)
+            cameras.append(cam_right)
+
+            np.set_printoptions(precision=6, suppress=True)
+            label = f"{entry['robot_part']}/{entry['key']}"
+            mode = "RECT" if self._rect_cam_info else "RAW"
+            for side, cam, k, d in (("LEFT (CAM_B)", cam_left, k_left, d_left),
+                                    ("RIGHT (CAM_C)", cam_right, k_right, d_right)):
+                K = np.asarray(k, dtype=np.float64).reshape(3, 3)
+                D = np.asarray(d, dtype=np.float64)
+                rfc_t = np.asarray(cam.rig_from_camera.translation)
+                rfc_q = np.asarray(cam.rig_from_camera.rotation)
+                print()
+                print(f"--- [ros_oak_stereo] {label} {side}  mode={mode} ---")
+                print(f"size = {cam.size}")
+                print(f"focal = {cam.focal}")
+                print(f"principal = {cam.principal}")
+                print(f"K =\n{K}")
+                print(f"D (8) = {D}")
+                print(f"distortion model = {cam.distortion.model}")
+                print(f"rig_from_camera.translation [m] = {rfc_t}")
+                print(f"rig_from_camera.rotation (qx,qy,qz,qw) = {rfc_q}")
+
+            rig_t_left = np.asarray(cam_left.rig_from_camera.translation)
+            rig_t_right = np.asarray(cam_right.rig_from_camera.translation)
+            rig_baseline_m = float(np.linalg.norm(rig_t_right - rig_t_left))
+            print()
+            print(f"[ros_oak_stereo] {label} baseline (rect_calib.baseline_m): "
+                  f"{baseline_m:.6f} m")
+            print(f"[ros_oak_stereo] {label} baseline (||rig_t_R - rig_t_L||):  "
+                  f"{rig_baseline_m:.6f} m")
+            print()
 
         # for cam in cameras:
         #     cam.border_bottom = cam.size[1] // 4
@@ -511,8 +616,11 @@ class RosOakRGBDTracker(BaseTracker):
         ns = f"/oak_{self._entry['robot_part']}_{self._entry['key']}"
         self._color_image_topic = f"{ns}/rgb/image_raw"
         self._depth_image_topic = f"{ns}/stereo/image_raw"
-        self._color_topic = f"{self._color_image_topic}/compressed"
-        self._depth_topic = f"{self._depth_image_topic}/compressedDepth"
+        # Raw transports (no compressed/compressedDepth) — same topics nvblox
+        # already uses, so the depthai driver isn't forced to spin its JPEG/PNG
+        # encoders just for cuvslam. Avoids encode-time stalls under motion.
+        self._color_topic = self._color_image_topic
+        self._depth_topic = self._depth_image_topic
         self._depth_scale = depth_scale
         self._running = False
 
@@ -522,6 +630,16 @@ class RosOakRGBDTracker(BaseTracker):
             f"  color: {self._color_topic}\n"
             f"  depth: {self._depth_topic}"
         )
+
+    @property
+    def num_viz_cameras(self) -> int:
+        return 1
+
+    def get_viz_image_indices(self) -> List[int]:
+        return [0]
+
+    def get_viz_observation_indices(self) -> List[int]:
+        return [0]
 
     def setup_camera_parameters(self) -> Dict[str, Dict]:
         import rclpy
@@ -558,6 +676,7 @@ class RosOakRGBDTracker(BaseTracker):
         return vslam.Tracker.OdometryConfig(
             async_sba=True,
             enable_final_landmarks_export=True,
+            enable_observations_export=True,
             odometry_mode=vslam.Tracker.OdometryMode.RGBD,
             rgbd_settings=rgbd_settings,
             rectified_stereo_camera=False,
@@ -567,14 +686,12 @@ class RosOakRGBDTracker(BaseTracker):
         return vslam.Tracker.SlamConfig(sync_mode=False, planar_constraints=True)
 
     def create_rig(self, camera_params: dict) -> vslam.Rig:
+        import numpy as np
+
         rig_cfg = self._entry.get("rig") or {}
         rig_from_color = _rig_from_camera_from_robot_pose(
             rig_cfg.get("rotation"),
             rig_cfg.get("translation"),
-        )
-        print(
-            f"[ros_oak_rgbd] {self._entry['robot_part']}/{self._entry['key']}: "
-            f"rig_from_color t={rig_from_color[:3, 3].tolist()}"
         )
 
         msg = camera_params["color_msg"]
@@ -584,6 +701,28 @@ class RosOakRGBDTracker(BaseTracker):
             rig_from_camera_4x4=rig_from_color,
         )
 
+        # Calibration dump — same format as RosOakStereoTracker.create_rig.
+        np.set_printoptions(precision=6, suppress=True)
+        label = f"{self._entry['robot_part']}/{self._entry['key']}"
+        K = np.asarray(list(msg.k), dtype=np.float64).reshape(3, 3)
+        D = np.asarray(
+            [float(msg.d[i]) if i < len(msg.d) else 0.0 for i in range(8)],
+            dtype=np.float64,
+        )
+        rfc_t = np.asarray(cam.rig_from_camera.translation)
+        rfc_q = np.asarray(cam.rig_from_camera.rotation)
+        print()
+        print(f"--- [ros_oak_rgbd] {label} COLOR (CAM_A) ---")
+        print(f"size = {cam.size}")
+        print(f"focal = {cam.focal}")
+        print(f"principal = {cam.principal}")
+        print(f"K =\n{K}")
+        print(f"D (8) = {D}")
+        print(f"distortion model = {cam.distortion.model}")
+        print(f"rig_from_camera.translation [m] = {rfc_t}")
+        print(f"rig_from_camera.rotation (qx,qy,qz,qw) = {rfc_q}")
+        print()
+
         rig = vslam.Rig()
         rig.cameras = [cam]
         return rig
@@ -592,7 +731,7 @@ class RosOakRGBDTracker(BaseTracker):
         self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         import message_filters
-        from sensor_msgs.msg import CompressedImage
+        from sensor_msgs.msg import Image
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -617,13 +756,21 @@ class RosOakRGBDTracker(BaseTracker):
                 return
             last_ts[0] = ts
 
-            color = _decode_oak_compressed_image(color_msg)
+            color = _decode_oak_raw_color(color_msg)
             if color is None:
-                print("[ros_oak_rgbd] Warning: color decode failed", flush=True)
+                print(
+                    f"[ros_oak_rgbd] Warning: color decode failed "
+                    f"(encoding={color_msg.encoding!r})",
+                    flush=True,
+                )
                 return
-            depth = _decode_compressed_depth(bytes(depth_msg.data))
+            depth = _decode_oak_raw_depth(depth_msg)
             if depth is None:
-                print("[ros_oak_rgbd] Warning: depth decode failed", flush=True)
+                print(
+                    f"[ros_oak_rgbd] Warning: depth decode failed "
+                    f"(encoding={depth_msg.encoding!r})",
+                    flush=True,
+                )
                 return
 
             t0 = time.monotonic()
@@ -661,10 +808,10 @@ class RosOakRGBDTracker(BaseTracker):
 
         self._node = Node("ros_oak_rgbd_frames")
         color_sub = message_filters.Subscriber(
-            self._node, CompressedImage, self._color_topic, qos_profile=qos
+            self._node, Image, self._color_topic, qos_profile=qos
         )
         depth_sub = message_filters.Subscriber(
-            self._node, CompressedImage, self._depth_topic, qos_profile=qos
+            self._node, Image, self._depth_topic, qos_profile=qos
         )
         self._sync = message_filters.ApproximateTimeSynchronizer(
             [color_sub, depth_sub], queue_size=10, slop=SLOP_SEC

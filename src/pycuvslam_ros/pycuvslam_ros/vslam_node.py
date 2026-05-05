@@ -35,9 +35,11 @@ ODOM_TOPIC = "/cuvslam/odometry"
 ODOM_FRAME = "odom"
 
 # Default ROS topic namespace (prefix) per RealSense camera model.
+# Trackers append "camera/infra1/..." etc., so the base must not include
+# the trailing /camera segment (matches the multi-cam convention).
 _REALSENSE_TOPIC_BASE_DEFAULT = {
-    "realsensed435": "/realsensed435_base/camera",
-    "realsensed455": "/realsensed455_base/camera",
+    "realsensed435": "/realsensed435_base",
+    "realsensed455": "/realsensed455_base",
 }
 
 
