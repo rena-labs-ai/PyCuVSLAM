@@ -53,6 +53,7 @@ def _make_oak_raw_camera(k, d, width: int, height: int, rig_from_camera_4x4) -> 
     return cam
 
 SLOP_SEC = 0.033
+QUEUE_SIZE = 100
 
 
 # Rotation that maps robot body axes (x-fwd, y-left, z-up) into cuVSLAM
@@ -607,18 +608,21 @@ class RosOakRGBDTracker(BaseTracker):
 
     def __init__(self, depth_scale: float = 0.001) -> None:
         oaks = _load_rena_oak_cameras()
-        if len(oaks) != 1:
+        if not oaks:
             raise RuntimeError(
-                f"RosOakRGBDTracker requires exactly 1 OAK in config.yaml, "
-                f"found {len(oaks)}: {[o['serial_no'] for o in oaks]}"
+                "RosOakRGBDTracker: no OAK in rena_bringup config.yaml."
+            )
+        if len(oaks) > 1:
+            print(
+                f"[ros_oak_rgbd] WARN {len(oaks)} OAKs in config "
+                f"{[o['serial_no'] for o in oaks]}; RGBD is single-camera, "
+                f"using first ({oaks[0]['serial_no']} "
+                f"{oaks[0]['robot_part']}/{oaks[0]['key']})."
             )
         self._entry = oaks[0]
         ns = f"/oak_{self._entry['robot_part']}_{self._entry['key']}"
         self._color_image_topic = f"{ns}/rgb/image_raw"
         self._depth_image_topic = f"{ns}/stereo/image_raw"
-        # Raw transports (no compressed/compressedDepth) — same topics nvblox
-        # already uses, so the depthai driver isn't forced to spin its JPEG/PNG
-        # encoders just for cuvslam. Avoids encode-time stalls under motion.
         self._color_topic = self._color_image_topic
         self._depth_topic = self._depth_image_topic
         self._depth_scale = depth_scale
@@ -743,11 +747,41 @@ class RosOakRGBDTracker(BaseTracker):
             depth=10,
         )
 
-        frames_fed = [0]
+        # Per-stage diagnostic counters. Logged together every 1s so we can
+        # see where the pipeline gets stuck:
+        #   color/s, depth/s   = arrivals on each topic (independent of sync)
+        #   sync/s             = ApproximateTimeSynchronizer match rate
+        #   decode_fail/s      = color or depth decode returned None
+        #   track_fail/s       = tracker.track() returned None pose
+        #   fed/s              = successful samples pushed to output queue
+        # Plus last-track latency (track_ms) and worst track since last log.
+        color_n     = [0]
+        depth_n     = [0]
+        sync_n      = [0]
+        decode_fail = [0]
+        track_fail  = [0]
+        fed_n       = [0]
+        track_ms_max = [0.0]
         last_log_time = [time.monotonic()]
         last_ts = [0]
+        last_track_ms = [0.0]
+
+        def _log_diag(now):
+            if now - last_log_time[0] >= 1.0:
+                print(
+                    f"[ros_oak_rgbd] color={color_n[0]}/s  depth={depth_n[0]}/s  "
+                    f"sync={sync_n[0]}/s  decode_fail={decode_fail[0]}  "
+                    f"track_fail={track_fail[0]}  fed={fed_n[0]}/s  "
+                    f"track={last_track_ms[0]:.1f}ms (peak {track_ms_max[0]:.1f}ms)",
+                    flush=True,
+                )
+                color_n[0] = depth_n[0] = sync_n[0] = 0
+                decode_fail[0] = track_fail[0] = fed_n[0] = 0
+                track_ms_max[0] = 0.0
+                last_log_time[0] = now
 
         def on_rgbd_pair(color_msg, depth_msg):
+            sync_n[0] += 1
             ts = (
                 color_msg.header.stamp.sec * 1_000_000_000
                 + color_msg.header.stamp.nanosec
@@ -758,19 +792,23 @@ class RosOakRGBDTracker(BaseTracker):
 
             color = _decode_oak_raw_color(color_msg)
             if color is None:
+                decode_fail[0] += 1
                 print(
-                    f"[ros_oak_rgbd] Warning: color decode failed "
+                    f"[ros_oak_rgbd] color decode failed "
                     f"(encoding={color_msg.encoding!r})",
                     flush=True,
                 )
+                _log_diag(time.monotonic())
                 return
             depth = _decode_oak_raw_depth(depth_msg)
             if depth is None:
+                decode_fail[0] += 1
                 print(
-                    f"[ros_oak_rgbd] Warning: depth decode failed "
+                    f"[ros_oak_rgbd] depth decode failed "
                     f"(encoding={depth_msg.encoding!r})",
                     flush=True,
                 )
+                _log_diag(time.monotonic())
                 return
 
             t0 = time.monotonic()
@@ -778,20 +816,17 @@ class RosOakRGBDTracker(BaseTracker):
                 ts, images=[color], depths=[depth]
             )
             track_ms = (time.monotonic() - t0) * 1000
+            last_track_ms[0] = track_ms
+            if track_ms > track_ms_max[0]:
+                track_ms_max[0] = track_ms
 
             if vo_pose_estimate.world_from_rig is None or slam_pose is None:
-                print("[ros_oak_rgbd] Warning: track failed", flush=True)
+                track_fail[0] += 1
+                _log_diag(time.monotonic())
                 return
 
-            frames_fed[0] += 1
-            now = time.monotonic()
-            if now - last_log_time[0] >= 1.0:
-                print(
-                    f"[ros_oak_rgbd] fed={frames_fed[0]}/s  track={track_ms:.1f}ms",
-                    flush=True,
-                )
-                frames_fed[0] = 0
-                last_log_time[0] = now
+            fed_n[0] += 1
+            _log_diag(time.monotonic())
 
             landmarks = [
                 Landmark(lm.id, lm.coords) for lm in tracker.get_last_landmarks()
@@ -806,7 +841,26 @@ class RosOakRGBDTracker(BaseTracker):
                 )
             )
 
+        # Stand-alone tick subscribers: count raw arrivals on each topic
+        # independent of the message_filters sync. If color/depth keep ticking
+        # but sync stops, the slop is too tight or stamps drifted; if color
+        # or depth itself stops ticking, the subscription/transport layer
+        # (not the tracker) is the bottleneck.
+        def _color_diag_cb(_):
+            color_n[0] += 1
+            _log_diag(time.monotonic())
+
+        def _depth_diag_cb(_):
+            depth_n[0] += 1
+            _log_diag(time.monotonic())
+
         self._node = Node("ros_oak_rgbd_frames")
+        self._node.create_subscription(
+            Image, self._color_topic, _color_diag_cb, qos
+        )
+        self._node.create_subscription(
+            Image, self._depth_topic, _depth_diag_cb, qos
+        )
         color_sub = message_filters.Subscriber(
             self._node, Image, self._color_topic, qos_profile=qos
         )
@@ -814,7 +868,7 @@ class RosOakRGBDTracker(BaseTracker):
             self._node, Image, self._depth_topic, qos_profile=qos
         )
         self._sync = message_filters.ApproximateTimeSynchronizer(
-            [color_sub, depth_sub], queue_size=10, slop=SLOP_SEC
+            [color_sub, depth_sub], queue_size=QUEUE_SIZE, slop=SLOP_SEC
         )
         self._sync.registerCallback(on_rgbd_pair)
 
