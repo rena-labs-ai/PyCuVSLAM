@@ -13,6 +13,7 @@ import threading
 import time
 import yaml
 
+import cuvslam as vslam
 import rclpy
 from rclpy.node import Node
 from builtin_interfaces.msg import Time
@@ -24,6 +25,7 @@ from geometry_msgs.msg import (
     TwistWithCovariance,
 )
 from nav_msgs.msg import Odometry
+from rena_msgs.srv import LocalizeInMap, SaveSlamMap
 
 from cuvslam_examples.realsense.pipeline import Pipeline
 from cuvslam_examples.realsense.tracker import RosRealsenseStereoTracker, RosRealsenseRGBDTracker
@@ -177,9 +179,20 @@ def main() -> None:
             self._pipeline = Pipeline(tracker, enable_visualization=enable_viz)
             self._pipeline.start()
 
+            self._latest_images = None
+            self._latest_images_lock = threading.Lock()
+
+            self._save_map_srv = self.create_service(
+                SaveSlamMap, "/vslam/save_map", self._on_save_map
+            )
+            self._localize_srv = self.create_service(
+                LocalizeInMap, "/vslam/localize_in_map", self._on_localize_in_map
+            )
+
             self.get_logger().info(
                 f"Publishing odometry only on {ODOM_TOPIC} "
-                f"(child_frame={child_frame}, no TF)"
+                f"(child_frame={child_frame}, no TF). "
+                f"Services: /vslam/save_map, /vslam/localize_in_map"
             )
             self._thread = threading.Thread(target=self._tracking_loop, daemon=True)
             self._thread.start()
@@ -189,6 +202,9 @@ def main() -> None:
                 result = self._pipeline.get(timeout=1.0)
                 if result is None or result.slam_pose is None:
                     continue
+                if result.images is not None:
+                    with self._latest_images_lock:
+                        self._latest_images = result.images
                 stamp = _stamp_from_ns(result.timestamp)
                 pose_robot = result.slam_pose.to_robot_frame()
                 t = pose_robot.translation
@@ -208,6 +224,71 @@ def main() -> None:
                 )
                 msg.twist = TwistWithCovariance()
                 self._odom_pub.publish(msg)
+
+        def _on_save_map(self, request, response):
+            t = self._pipeline.tracker
+            if t is None:
+                response.success = False
+                response.message = "tracker not ready"
+                return response
+            done = threading.Event()
+            ok = [False]
+            def cb(success: bool) -> None:
+                ok[0] = bool(success)
+                done.set()
+            try:
+                t.save_map(request.folder_path, cb)
+            except Exception as exc:
+                response.success = False
+                response.message = f"save_map raised: {exc}"
+                return response
+            if not done.wait(timeout=120.0):
+                response.success = False
+                response.message = "save_map timed out after 120s"
+                return response
+            response.success = ok[0]
+            response.message = "saved" if ok[0] else "cuvslam reported failure"
+            return response
+
+        def _on_localize_in_map(self, request, response):
+            t = self._pipeline.tracker
+            if t is None:
+                response.success = False
+                response.message = "tracker not ready"
+                return response
+            with self._latest_images_lock:
+                images = self._latest_images
+            if images is None:
+                response.success = False
+                response.message = "no recent images from tracker; cannot relocalize"
+                return response
+            q = request.guess_pose.orientation
+            p = request.guess_pose.position
+            guess = vslam.Pose(
+                rotation=[float(q.x), float(q.y), float(q.z), float(q.w)],
+                translation=[float(p.x), float(p.y), float(p.z)],
+            )
+            done = threading.Event()
+            result_pose = [None]
+            err_msg = [""]
+            def cb(pose, msg: str) -> None:
+                result_pose[0] = pose
+                err_msg[0] = msg or ""
+                done.set()
+            try:
+                settings = vslam.Slam.LocalizationSettings()
+                t.localize_in_map(request.folder_path, guess, images, settings, cb)
+            except Exception as exc:
+                response.success = False
+                response.message = f"localize_in_map raised: {exc}"
+                return response
+            if not done.wait(timeout=60.0):
+                response.success = False
+                response.message = "localize_in_map timed out after 60s"
+                return response
+            response.success = result_pose[0] is not None
+            response.message = err_msg[0] if not response.success else "localized"
+            return response
 
         def destroy_node(self) -> None:
             self._pipeline.stop()
