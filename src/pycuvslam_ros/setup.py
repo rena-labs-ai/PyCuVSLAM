@@ -12,12 +12,11 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", glob("launch/*.py")),
-        ("share/" + package_name + "/config", glob("config/*.yaml")),
     ],
     zip_safe=True,
     maintainer="User",
     maintainer_email="user@example.com",
-    description="ROS2 wrapper for PyCuVSLAM multi-camera visual SLAM",
+    description="ROS2 wrapper for PyCuVSLAM visual SLAM on OAK cameras",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

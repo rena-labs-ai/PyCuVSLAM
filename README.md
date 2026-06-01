@@ -43,18 +43,22 @@ colcon build --packages-select pycuvslam_ros
 
 ## Run
 
-1. Edit the [rig config](./src/pycuvslam_ros/config/frame_agx_rig.yaml): set `serial` and `name` per camera; comment out cameras you don't have.
+Only OAK cameras are supported. The camera topics are derived inside the
+tracker from `rena_bringup/config/config.yaml` (serial + `image_mode` →
+`image_raw` | `image_rect`), so there is no separate rig config to edit.
 
-2. Launch cameras:
+1. Bring up the OAK camera (via the robot bring-up, e.g. `rena start`, which
+   launches the `depthai_ros_driver_v3` OAK driver).
+
+2. Launch vslam:
 
 ```bash
-ros2 launch pycuvslam_ros camera.launch.py
-```
-
-3. Launch vslam:
-
-```bash
+# RGBD tracker (default)
 ros2 launch pycuvslam_ros vslam.launch.py
+
+# or the stereo tracker
+ros2 launch pycuvslam_ros vslam.launch.py tracker:=ros_oak_stereo
 ```
 
-It creates a live image comparing cuvslam/odometry with fast_lio /Odometry (make sure fast_lio is running).
+With `enable_plot:=true` it creates a live image comparing `/cuvslam/odometry`
+with fast_lio `/Odometry` (make sure fast_lio is running).

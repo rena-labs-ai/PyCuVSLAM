@@ -3,7 +3,7 @@
 <package format="3">
   <name>pycuvslam_ros</name>
   <version>0.1.0</version>
-  <description>ROS2 wrapper for PyCuVSLAM multi-camera visual SLAM</description>
+  <description>ROS2 wrapper for PyCuVSLAM visual SLAM on OAK cameras</description>
   <maintainer email="user@example.com">User</maintainer>
   <license>Apache-2.0</license>
 
@@ -14,10 +14,6 @@
   <depend>sensor_msgs</depend>
   <exec_depend>python3-opencv</exec_depend>
   <depend>message_filters</depend>
-  <exec_depend>realsense2_camera</exec_depend>
-  <exec_depend>zed_components</exec_depend>
-  <exec_depend>zed_wrapper</exec_depend>
-  <exec_depend>zed_description</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
