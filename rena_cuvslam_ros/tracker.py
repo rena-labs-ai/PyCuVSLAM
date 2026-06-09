@@ -814,7 +814,7 @@ class RosOakRGBDTracker(BaseTracker):
         self._color_image_topic = f"{ns}/rgb/image_raw"
         self._depth_image_topic = f"{ns}/stereo/image_raw"
         self._color_topic = f"{ns}/rgb/image_raw/compressed"
-        self._depth_topic = f"{ns}/stereo/image_raw"
+        self._depth_topic = f"{ns}/stereo/image_raw/compressedDepth"
         self._depth_scale = depth_scale
         self._running = False
 
@@ -925,7 +925,7 @@ class RosOakRGBDTracker(BaseTracker):
         self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         import message_filters
-        from sensor_msgs.msg import CompressedImage, Image
+        from sensor_msgs.msg import CompressedImage
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -990,12 +990,12 @@ class RosOakRGBDTracker(BaseTracker):
                 )
                 _log_diag(time.monotonic())
                 return
-            depth = _decode_oak_raw_depth(depth_msg)
+            depth = _decode_compressed_depth(bytes(depth_msg.data))
             if depth is None:
                 decode_fail[0] += 1
                 print(
                     f"[ros_oak_rgbd] depth decode failed "
-                    f"(encoding={depth_msg.encoding!r})",
+                    f"(format={depth_msg.format!r})",
                     flush=True,
                 )
                 _log_diag(time.monotonic())
@@ -1051,7 +1051,7 @@ class RosOakRGBDTracker(BaseTracker):
             self._node, CompressedImage, self._color_topic, qos_profile=qos
         )
         depth_sub = message_filters.Subscriber(
-            self._node, Image, self._depth_topic, qos_profile=qos
+            self._node, CompressedImage, self._depth_topic, qos_profile=qos
         )
         color_sub.registerCallback(_color_diag_cb)
         depth_sub.registerCallback(_depth_diag_cb)
