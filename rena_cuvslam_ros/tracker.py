@@ -813,8 +813,8 @@ class RosOakRGBDTracker(BaseTracker):
         ns = f"/{self._entry['robot_part']}/{self._entry['key']}"
         self._color_image_topic = f"{ns}/rgb/image_raw"
         self._depth_image_topic = f"{ns}/stereo/image_raw"
-        self._color_topic = self._color_image_topic
-        self._depth_topic = self._depth_image_topic
+        self._color_topic = f"{ns}/rgb/image_raw/compressed"
+        self._depth_topic = f"{ns}/stereo/image_raw"
         self._depth_scale = depth_scale
         self._running = False
 
@@ -925,7 +925,7 @@ class RosOakRGBDTracker(BaseTracker):
         self, tracker: vslam.Tracker, output_queue: queue.Queue, **kwargs
     ) -> None:
         import message_filters
-        from sensor_msgs.msg import Image
+        from sensor_msgs.msg import CompressedImage, Image
         from rclpy.node import Node
         from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 
@@ -980,12 +980,12 @@ class RosOakRGBDTracker(BaseTracker):
                 return
             last_ts[0] = ts
 
-            color = _decode_oak_raw_color(color_msg)
+            color = _decode_oak_compressed_image(color_msg)
             if color is None:
                 decode_fail[0] += 1
                 print(
                     f"[ros_oak_rgbd] color decode failed "
-                    f"(encoding={color_msg.encoding!r})",
+                    f"(format={color_msg.format!r})",
                     flush=True,
                 )
                 _log_diag(time.monotonic())
@@ -1031,11 +1031,13 @@ class RosOakRGBDTracker(BaseTracker):
                 )
             )
 
-        # Stand-alone tick subscribers: count raw arrivals on each topic
-        # independent of the message_filters sync. If color/depth keep ticking
-        # but sync stops, the slop is too tight or stamps drifted; if color
-        # or depth itself stops ticking, the subscription/transport layer
-        # (not the tracker) is the bottleneck.
+        # Per-topic arrival counters. These hang off the SAME message_filters
+        # subscriptions used for sync (registerCallback on the filter), so we
+        # get independent color/depth tick counts without a second ROS
+        # subscription per topic — duplicate raw-Image subs were doubling the
+        # ~750 KB/frame transport into this node and starving the raw stream.
+        # If color/depth keep ticking but sync stops, the slop is too tight or
+        # stamps drifted; if a topic stops ticking, transport is the bottleneck.
         def _color_diag_cb(_):
             color_n[0] += 1
             _log_diag(time.monotonic())
@@ -1045,18 +1047,14 @@ class RosOakRGBDTracker(BaseTracker):
             _log_diag(time.monotonic())
 
         self._node = Node("ros_oak_rgbd_frames")
-        self._node.create_subscription(
-            Image, self._color_topic, _color_diag_cb, qos
-        )
-        self._node.create_subscription(
-            Image, self._depth_topic, _depth_diag_cb, qos
-        )
         color_sub = message_filters.Subscriber(
-            self._node, Image, self._color_topic, qos_profile=qos
+            self._node, CompressedImage, self._color_topic, qos_profile=qos
         )
         depth_sub = message_filters.Subscriber(
             self._node, Image, self._depth_topic, qos_profile=qos
         )
+        color_sub.registerCallback(_color_diag_cb)
+        depth_sub.registerCallback(_depth_diag_cb)
         self._sync = message_filters.ApproximateTimeSynchronizer(
             [color_sub, depth_sub], queue_size=QUEUE_SIZE, slop=SLOP_SEC
         )
